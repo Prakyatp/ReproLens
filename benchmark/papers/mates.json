@@ -1,0 +1,122 @@
+{
+  "paper_id": "mates",
+  "title": "MATES: a deep learning-based model for locus-specific quantification of transposable elements in single-cell RNA-seq",
+  "citation": "Ding et al., Nature Communications, 2024",
+  "github": "MATES pipeline (exact repo URL not confirmed verbatim from source worklog — TODO: fill in before using this record outside this benchmark)",
+  "data_accessions": [
+    "GSE212945 (primary quantification-accuracy benchmark: A375/MEL2 melanoma, matched short-read 10x scRNA-seq + long-read Nanopore, Shiau et al. 2023)",
+    "GSE114952 (mouse chemical reprogramming, clustering-only benchmark)",
+    "GSE84465 (Smart-seq2 human glioblastoma, clustering-only benchmark)",
+    "GSE158450 (mouse brain PacBio, secondary quantification benchmark)"
+  ],
+  "annotation_provenance": {
+    "tier": 1,
+    "type": "first-hand reproduction attempt",
+    "annotators": ["Prakyat Prakash", "XuanTing Liu", "Prof. Feng Cui (PI)"],
+    "source": "Lab worklog (Google Doc \"Work Log\"), mirrored partially in /Users/prakx/project_dir/RA/3d-genome-worklog",
+    "duration": "2026-01-08 to 2026-06-05 (~5 months, ending when the team pivoted to a new project)",
+    "annotation_date": "2026-09-26"
+  },
+  "resource_requirements": {
+    "data": {
+      "required": "Matched short-read (10x scRNA-seq) and long-read (Nanopore scNanoRNAseq) data from the same biological sample, GSE212945",
+      "available": true,
+      "notes": "Public via ENA/SRA, but the paper does not say which specific sample (MEL1 vs. MEL2) or cell count was used for the headline benchmark.",
+      "evidence": ["worklog:2026-03-15", "worklog:2026-03-17", "worklog:2026-04-09"]
+    },
+    "code": {
+      "required": "MATES AE+MLP pipeline; scNanoGPS (for building the long-read ground truth)",
+      "available": true,
+      "notes": "Both public and installable; scNanoGPS v2.0 (gaolabtools/scNanoGPS).",
+      "evidence": ["worklog:2026-03-19"]
+    },
+    "environment": {
+      "required": "Conda environments for MATES and scNanoGPS",
+      "available": true,
+      "notes": "Reasonably reproducible; friction was cluster/queue-related (GPU availability, memory limits) rather than the environment spec itself.",
+      "evidence": ["worklog:2026-02-16", "worklog:2026-03-20"]
+    },
+    "model_checkpoints": {
+      "required": "None — MATES trains its own AE+MLP per dataset",
+      "available": true
+    },
+    "parameters": {
+      "required": "Exact STARsolo alignment command/flags; RepeatMasker annotation version; GENCODE annotation version; exact sample/cell-count selection for the nanopore validation set",
+      "available": false,
+      "notes": "Confirmed absent by a dedicated audit of the paper's own peer-review correspondence, not just the manuscript: exact STARsolo multi-mapper/barcode flags were missing from the original submission; RepeatMasker and GENCODE versions were never specified; and the paper never states which GEO sample, how many cells, or whether samples were pooled for the nanopore validation.",
+      "evidence": ["worklog:2026-06-01", "worklog:2026-06-05"]
+    }
+  },
+  "blockers": [
+    {
+      "severity": "major",
+      "description": "Exact STARsolo alignment parameters (multi-mapper retention flags, barcode matching strategy) used to produce the paper's 1185-cell whitelist are undocumented; confirmed missing even from the original submission per peer-review record.",
+      "evidence": ["worklog:2026-06-01"],
+      "resolved": false
+    },
+    {
+      "severity": "major",
+      "description": "RepeatMasker track version and GENCODE annotation version used for both the MATES reference build and the ground-truth featureCounts step are never specified.",
+      "evidence": ["worklog:2026-06-01"],
+      "resolved": false
+    },
+    {
+      "severity": "major",
+      "description": "The paper says \"melanoma brain metastasis dataset\" without naming which GEO sample (MEL1 vs. MEL2), how many cells were used, or whether multiple samples were pooled for the R²=0.7531 nanopore-validation figure.",
+      "evidence": ["worklog:2026-06-05"],
+      "resolved": false
+    }
+  ],
+  "methodological_risks": [
+    {
+      "description": "Using long-read-derived values as both a training prior (for a VAE/Bayesian extension) and the evaluation ground truth risks circular validation — independently flagged twice by the PI across separate extension attempts, and not a resource-availability issue per se but a trap anyone reusing MATES's long-read-prior design should watch for.",
+      "evidence": ["worklog:2026-03-10", "worklog:2026-05-01 (area)"]
+    }
+  ],
+  "per_result_analysis": [
+    {
+      "result": "Polyester/Alu simulation benchmark (paper reports R²=0.7420)",
+      "status": "reproducible",
+      "readiness_pct": 95,
+      "notes": "Best reproduction reached R²=0.7396 — within ~0.3% of the paper's reported value.",
+      "evidence": ["worklog:2026-04-24"]
+    },
+    {
+      "result": "Fig. 7a-equivalent: MATES vs. long-read ground truth, subfamily-level per-cell R² (paper reports 0.7531)",
+      "status": "partial",
+      "readiness_pct": 55,
+      "notes": "Converged toward but never matched the target across ~4 months. Cell-count mismatches (1189 vs. 1016 vs. 875 shared cells) traced to an undocumented scNanoGPS barcode-merging step; final plateau at 0.7125 (1016 cells) / 0.7119 (1189 cells).",
+      "evidence": ["worklog:2026-03-24", "worklog:2026-05-01", "worklog:2026-05-22"]
+    },
+    {
+      "result": "Fig. 7a-equivalent: pseudo-bulk R² (paper reports 0.9276)",
+      "status": "partial",
+      "readiness_pct": 60,
+      "notes": "Ranged 0.7109-0.8654 across configurations; never simultaneously matched alongside the per-cell number above.",
+      "evidence": ["worklog:2026-03-29", "worklog:2026-05-01"]
+    }
+  ],
+  "scoring_rubric_v0.1": {
+    "data_availability": 18,
+    "code_availability": 18,
+    "environment_specification": 12,
+    "method_completeness": 12,
+    "parameters_configuration": 2,
+    "execution_instructions": 9,
+    "result_traceability": 3,
+    "total": 74,
+    "notes": "Scored out of the blueprint's 100-point rubric. Slightly higher than LocusMasterTE on environment/execution (better-documented pipeline), but the same core weakness: parameters_configuration and result_traceability are both low because the exact benchmark configuration cannot be recovered from public materials."
+  },
+  "readiness_score": 74,
+  "verified_reproduction": {
+    "attempted": true,
+    "outcome": "partial",
+    "score": 55,
+    "summary": "The simulation-based benchmark (Polyester/Alu, R²≈0.74) was reproduced almost exactly. The primary real-data benchmark (per-cell R²=0.7531, pseudo-bulk R²=0.9276) was approached (best: 0.71-0.75 per-cell, 0.71-0.86 pseudo-bulk) across roughly four months of iteration but never matched. A dedicated audit of the paper's peer-review correspondence confirmed the residual gap cannot be closed from public materials alone: STARsolo parameters, annotation versions, and the exact validation-sample composition are all undisclosed. Unlike LocusMasterTE, this is not one single missing artifact but several compounding undocumented parameters, closer to a 'moderate reproducibility, exact match structurally impossible' case than a hard block."
+  },
+  "severity_summary": {
+    "hard_blockers": 0,
+    "major_issues": 3,
+    "minor_issues": 0
+  }
+}
