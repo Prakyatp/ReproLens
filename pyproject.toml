@@ -1,0 +1,37 @@
+[project]
+name = "reprolens"
+version = "0.1.0"
+description = "AI-assisted scientific reproducibility auditor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+    "pytesseract>=0.3.10",
+    "pillow>=10.0",
+    "anthropic>=0.40",
+    "pydantic>=2.0",
+    "ollama>=0.6.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["reprolens"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# The blueprint is a design document that happens to contain Python in fenced
+# blocks. Reformatting prose is not ruff's job.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
