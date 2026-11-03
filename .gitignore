@@ -7,3 +7,13 @@ __pycache__/
 venv/
 .DS_Store
 output/
+
+# fetched papers -- journal PDFs have varying redistribution licences
+data/papers/
+data/xml/
+
+# model response cache
+.cache/
+
+# fetched repositories -- the code the paper points at, not ours to redistribute
+data/repos/
