@@ -8,7 +8,7 @@ verdicts being honest, which is what these tests pin.
 
 from __future__ import annotations
 
-from reprolens.graph.build import BROKEN, SATISFIED, UNMAPPED, build
+from reprolens.graph.build import BROKEN, SATISFIED, UNMAPPED, UNVERIFIED, build
 
 
 def repo(**overrides) -> dict:
@@ -81,7 +81,7 @@ class TestBrokenPaths:
         paths = {p.start: p for p in graph.reachability(("entry_point",))}
         (path,) = paths.values()
         assert path.verdict == BROKEN
-        assert "demo_scale" in path.reason
+        assert "demo scale" in path.reason
 
     def test_an_absent_input_breaks_the_path(self):
         graph = build(
@@ -194,6 +194,76 @@ class TestSatisfiedRequiresData:
         (path,) = graph.reachability(("entry_point",))
         assert path.verdict == SATISFIED
         assert "sample_sorted.bam" in path.reason
+
+
+class TestTheWeakestLinkDecides:
+    """A result is satisfied only when every path from it lands on checked data.
+
+    Reporting the strongest path instead said ASPEN's Figure 5 was satisfied
+    because three of its five inputs are present, while the other two are
+    paths assembled from a variable that nothing in the repository matches --
+    the same over-claim as accepting a tool name, reached a different way.
+    """
+
+    def figure_reading(self, *refs) -> dict:
+        return {
+            "fetched": True,
+            "repositories": [{"repository": "lab/paper"}],
+            "execution": {"entry_points": [], "inputs": [], "tools_called": []},
+            "figure_traceability": {
+                "paper_figures": [5],
+                "scripts": [{"figure": 5, "source": "lab/paper:Figure5.ipynb"}],
+            },
+            "figure_data": {
+                "references": [
+                    {
+                        "target": target,
+                        "kind": "repo_path",
+                        "status": status,
+                        "named_by": "lab/paper:Figure5.ipynb",
+                        "detail": "",
+                    }
+                    for target, status in refs
+                ]
+            },
+        }
+
+    def test_all_present_is_satisfied(self):
+        graph = build(self.figure_reading(("a.csv", "present"), ("b.csv", "present")))
+        (path,) = graph.reachability(("result",))
+        assert path.verdict == SATISFIED
+
+    def test_one_unverified_among_present_ones_is_unverified(self):
+        graph = build(
+            self.figure_reading(
+                ("a.csv", "present"), ("b.csv", "present"), ("c.csv", "constructed")
+            )
+        )
+        (path,) = graph.reachability(("result",))
+        assert path.verdict == UNVERIFIED
+        assert "c.csv" in path.reason
+
+    def test_a_break_outranks_an_unverified_sibling(self):
+        graph = build(
+            self.figure_reading(("a.csv", "present"), ("b.csv", "remote"), ("c.csv", "moved"))
+        )
+        (path,) = graph.reachability(("result",))
+        assert path.verdict == BROKEN
+        assert "c.csv" in path.reason
+
+    def test_a_wrong_path_breaks_and_says_so_distinctly(self):
+        graph = build(self.figure_reading(("./data/misc/x.xlsx", "moved")))
+        (path,) = graph.reachability(("result",))
+        assert path.verdict == BROKEN
+        assert "wrong path" in path.reason or "not at" in path.reason
+
+    def test_remote_data_is_unverified_rather_than_missing(self):
+        # LocusMasterTE's four traceable figures land here: the data is
+        # deposited at Figshare and this tool does not fetch it.
+        graph = build(self.figure_reading(("https://figshare.com/x/1", "remote")))
+        (path,) = graph.reachability(("result",))
+        assert path.verdict == UNVERIFIED
+        assert "unchecked" in path.reason
 
 
 class TestResultsAndScripts:

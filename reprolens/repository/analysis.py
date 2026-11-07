@@ -24,6 +24,7 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from reprolens.extraction.checklist import SOFTWARE_KINDS
+from reprolens.repository import datarefs as datarefs_read
 from reprolens.repository import execution as execution_read
 from reprolens.repository import inventory as inventory_read
 from reprolens.repository import manifests as manifests_read
@@ -72,6 +73,7 @@ class RepoAnalysis:
     manifests: manifests_read.Manifests = field(default_factory=manifests_read.Manifests)
     execution: execution_read.Execution = field(default_factory=execution_read.Execution)
     figures: FigureCoverage = field(default_factory=FigureCoverage)
+    figure_data: datarefs_read.DataRefs = field(default_factory=datarefs_read.DataRefs)
     undocumented_steps: list[UndocumentedStep] = field(default_factory=list)
 
     @property
@@ -100,6 +102,7 @@ class RepoAnalysis:
                 "covered": self.figures.covered,
                 "uncovered": self.figures.uncovered,
             },
+            "figure_data": self.figure_data.to_dict(),
             "undocumented_steps": [asdict(s) for s in self.undocumented_steps],
         }
 
@@ -132,6 +135,7 @@ def analyze(
     analysis.manifests = manifests_read.read(analysis.inventory)
     analysis.execution = execution_read.read(analysis.inventory)
     analysis.figures = _figure_coverage(analysis.inventory, paper_figures)
+    analysis.figure_data = datarefs_read.read(analysis.inventory, analysis.figures.scripts)
     analysis.undocumented_steps = _undocumented_steps(analysis.execution, paper_software)
     return analysis
 
