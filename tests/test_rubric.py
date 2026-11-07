@@ -378,7 +378,9 @@ class TestTheRepositoryChannel:
         parameters = self.criterion(assessment, "parameters_configuration")
         assert parameters.floor == 0
 
-    def test_traceability_scores_the_mapping_and_says_so(self, tmp_path):
+    def test_traceability_falls_back_to_the_mapping_with_no_graph(self, tmp_path):
+        # With no dependency graph to consult, the floor stays at the mapping
+        # rather than dropping to zero: an absent channel is not evidence.
         pages, findings, checklist = self.paper()
         files = {f"fig{n}.R": "library(x)\n" for n in (1, 3, 4, 5)}
         criterion = self.criterion(
@@ -409,6 +411,76 @@ class TestTheRepositoryChannel:
         # stays at the weight because whether the description is otherwise
         # complete is not assessable from either document.
         assert (criterion.floor, criterion.ceiling) == (8, WEIGHTS["method_completeness"])
+
+
+class TestTraceabilityReadsTheGraph:
+    """The mapping sets the ceiling; the graph sets the floor.
+
+    A script named for a figure is not on its own a trace to what produced it.
+    Scoring it as one gave LocusMasterTE 8 of 10 for four files called
+    ``figN.R`` where the annotators, who had actually attempted the
+    reproduction, gave 3 -- the single largest standing divergence in the
+    benchmark. The graph says why: none of those four results reaches data
+    this tool could check.
+    """
+
+    def paper(self):
+        return TestTheRepositoryChannel.paper(self)
+
+    def repo(self, tmp_path, files, figures):
+        return TestTheRepositoryChannel.repo(self, tmp_path, files, figures=figures)
+
+    def criterion(self, assessment, name):
+        return criterion(assessment, name)
+
+    def graph_with(self, satisfied: list[int], covered: list[int]) -> dict:
+        return {
+            "assessable": True,
+            "nodes": [{"id": f"figure:{n}", "kind": "result"} for n in covered],
+            "paths": [
+                {
+                    "start": f"figure:{n}",
+                    "verdict": "satisfied" if n in satisfied else "unverified",
+                    "nodes": [],
+                    "reason": "",
+                }
+                for n in covered
+            ],
+        }
+
+    def assess_with(self, tmp_path, graph):
+        pages, findings, checklist = self.paper()
+        files = {f"fig{n}.R": "library(x)\n" for n in (1, 3, 4, 5)}
+        repo = self.repo(tmp_path, files, figures=[1, 2, 3, 4, 5])
+        return self.criterion(
+            assess(pages, findings, checklist, repo, None, None, None, graph),
+            "result_traceability",
+        )
+
+    def test_nothing_traced_drops_the_floor_and_keeps_the_ceiling(self, tmp_path):
+        # LocusMasterTE's shape: four scripts named, none reaching data this
+        # audit can check. 8-8 became 0-8, which contains the annotators' 3.
+        got = self.assess_with(tmp_path, self.graph_with([], [1, 3, 4, 5]))
+        assert (got.floor, got.ceiling) == (0, 8)
+        assert any("none of them reaches data" in line for line in got.basis)
+
+    def test_figures_traced_end_to_end_raise_the_floor(self, tmp_path):
+        got = self.assess_with(tmp_path, self.graph_with([1, 3], [1, 3, 4, 5]))
+        assert got.floor == 4
+        assert got.ceiling == 8
+        assert any("figure 1" in line and "end to end" in line for line in got.basis)
+
+    def test_the_floor_never_exceeds_the_ceiling(self, tmp_path):
+        # A graph reporting more traced figures than the paper has scripts for
+        # must not invert the band.
+        got = self.assess_with(tmp_path, self.graph_with([1, 2, 3, 4, 5], [1, 2, 3, 4, 5]))
+        assert got.floor <= got.ceiling
+
+    def test_an_unassessable_graph_lowers_nothing(self, tmp_path):
+        # Not the same as nothing traced: no graph is no evidence, and the
+        # floor stays where the mapping put it.
+        got = self.assess_with(tmp_path, {"assessable": False, "nodes": [], "paths": []})
+        assert (got.floor, got.ceiling) == (8, 8)
 
 
 class TestADocumentThatWasNotRead:
