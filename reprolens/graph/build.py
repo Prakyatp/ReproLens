@@ -57,9 +57,10 @@ EdgeKind = Literal[
 
 SATISFIED = "satisfied"
 BROKEN = "broken"
+UNVERIFIED = "unverified"
 UNMAPPED = "unmapped"
 
-Verdict = Literal["satisfied", "broken", "unmapped"]
+Verdict = Literal["satisfied", "broken", "unverified", "unmapped"]
 
 # An input's status, as ``repository.execution`` reports it, mapped to whether
 # a path through that input is usable. ``demo_scale`` is a break rather than a
@@ -70,6 +71,22 @@ Verdict = Literal["satisfied", "broken", "unmapped"]
 _INPUT_BREAKS = {
     "absent": "named but not present in the repository",
     "demo_scale": "present only at demo scale",
+    # The script looks in the wrong place. Reported separately from ``absent``
+    # because the two call for different work, and because the distinction
+    # found a real defect: ASPEN's Figure3.ipynb reads
+    # ./data/misc/cells_pass_filter.xlsx, which is not there, while
+    # misc/cells_pass_filter.xlsx is. The notebook fails on a fresh clone and
+    # the fix is one path segment.
+    "moved": "read from a path it is not at",
+}
+# Located but not checkable here. ``remote`` is deposited data this module does
+# not fetch; ``constructed`` is a path assembled from a variable, where only
+# the filename is known and nothing of that name is in the repository -- a
+# figure notebook reading its own pipeline's output looks exactly like this, so
+# calling it a defect would be wrong and calling it present would be worse.
+_INPUT_UNVERIFIED = {
+    "remote": "deposited remotely and never fetched, so whether it resolves is unchecked",
+    "constructed": "named only by filename, so whether it exists is undetermined",
 }
 # ``user_supplied`` is deliberately not a break. A pipeline that asks for your
 # own FASTQ is behaving correctly, and calling that a defect would penalize
@@ -171,7 +188,7 @@ class Graph:
             trail = queue.popleft()
             node = self.nodes[trail[-1]]
             if node.status in _INPUT_BREAKS:
-                return Path(start, BROKEN, trail, f"{node.label} is {node.status}")
+                return Path(start, BROKEN, trail, f"{node.label} is {_INPUT_BREAKS[node.status]}")
             onward = [e for e in self.out(trail[-1]) if e.target not in seen]
             if not onward:
                 terminals.append(trail)
@@ -180,8 +197,25 @@ class Graph:
                 seen.add(edge.target)
                 queue.append([*trail, edge.target])
 
-        # Nothing broken. Whether that is reassuring depends entirely on what
-        # the walk actually reached.
+        # Nothing broken. The weakest link decides what is left: a result is
+        # satisfied only when *every* path from it lands on data that was
+        # actually checked. Reporting the strongest path instead would say
+        # ASPEN's Figure 5 is satisfied because three of its five inputs are
+        # present, while the other two are paths assembled from a variable that
+        # nothing in the repository matches -- the same over-claim as accepting
+        # a tool name, reached a different way.
+        for trail in terminals:
+            node = self.nodes[trail[-1]]
+            if node.status in _INPUT_UNVERIFIED:
+                return Path(
+                    start,
+                    UNVERIFIED,
+                    trail,
+                    f"{node.label} is {_INPUT_UNVERIFIED[node.status]}",
+                )
+
+        # Whether reaching the end of a path is reassuring depends entirely on
+        # what the walk actually reached.
         #
         # Only an input whose status was checked earns ``satisfied``. Reaching
         # a *tool* does not, and the first draft of this walk accepted it:
@@ -219,7 +253,7 @@ class Graph:
 
     def to_dict(self) -> dict:
         paths = self.reachability(("result", "entry_point"))
-        tally: dict[str, int] = {SATISFIED: 0, BROKEN: 0, UNMAPPED: 0}
+        tally: dict[str, int] = {SATISFIED: 0, BROKEN: 0, UNVERIFIED: 0, UNMAPPED: 0}
         for path in paths:
             tally[path.verdict] += 1
         by_kind: dict[str, int] = {}
@@ -278,6 +312,26 @@ def build(repo: dict, *, resolutions: dict | None = None) -> Graph:
         for source in scripts_for.get(figure, []):
             script = graph.add(Node("script", _key("script", source), source))
             graph.link("generated_by", result, script)
+
+    # -- what each figure script reads -------------------------------------
+    # The edge the graph was missing. ``execution.inputs`` attributes an input
+    # to the file that names it, and that file is a pipeline shell script, never
+    # the script that draws the figure -- so before this every result in every
+    # paper returned ``unmapped`` and ``satisfied`` was unreachable in practice.
+    for ref in (repo.get("figure_data", {}) or {}).get("references", []):
+        script = _key("script", ref["named_by"])
+        if script not in graph.nodes:
+            continue
+        node = graph.add(
+            Node(
+                "input" if ref["kind"] == "repo_path" else "dataset",
+                _key("data", ref["target"]),
+                ref["target"],
+                status=ref["status"],
+                detail=ref.get("detail", ""),
+            )
+        )
+        graph.link("reads", script, node, evidence=ref.get("detail", ""))
 
     # -- entry points, and what they read and call -------------------------
     for point in execution.get("entry_points", []):
