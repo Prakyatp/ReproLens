@@ -149,6 +149,7 @@ def assess(
     figures: Merge | None = None,
     resolutions: Resolutions | None = None,
     supplements: Supplements | None = None,
+    graph: dict | None = None,
 ) -> Assessment:
     """Score one paper against the rubric, from evidence already gathered.
 
@@ -220,7 +221,7 @@ def assess(
         criteria += [
             _method_completeness(read_repo, supplements),
             _execution_instructions(read_repo),
-            _result_traceability(read_repo),
+            _result_traceability(read_repo, graph),
         ]
     return Assessment(
         version=RUBRIC_VERSION,
@@ -813,14 +814,26 @@ def _execution_instructions(repo: RepoAnalysis) -> Criterion:
     )
 
 
-def _result_traceability(repo: RepoAnalysis) -> Criterion:
-    """Whether each published result can be traced to the code that made it.
+def _result_traceability(repo: RepoAnalysis, graph: dict | None = None) -> Criterion:
+    """Whether each published result can be traced to the code and data that made it.
 
-    Scored on the mapping and nothing else. A file called ``fig3.R`` answers
-    "which code produced Figure 3"; whether running it reproduces the figure is
-    a different question, and the blueprint keeps it separate -- section 5
-    distinguishes reproducibility readiness from verified reproduction, and the
-    benchmark records score the two independently.
+    Still not a claim about reproduction: whether running ``fig3.R`` redraws
+    Figure 3 is a different question, and the blueprint keeps it separate
+    (section 5 distinguishes readiness from verified reproduction, and the
+    benchmark scores the two independently).
+
+    But a script named for a figure is not on its own a trace to what produced
+    it, and scoring it as one over-scored every paper that has figure code.
+    LocusMasterTE got 8 of 10 for four files named ``figN.R`` where the
+    annotators, who had actually tried, gave 3. The dependency graph says why:
+    none of those four results reaches data this tool could check. ASPEN's
+    Figure 3 is sharper still -- a notebook is named for it, and the notebook
+    reads a path that does not exist in the repository.
+
+    So the mapping sets the ceiling and the graph sets the floor, which is the
+    band's own definition: definitely traceable, and at most traceable. A
+    figure whose chain is checked end to end counts toward both; one with a
+    script whose data could not be verified counts only toward the ceiling.
     """
     basis: list[str] = []
     weight = WEIGHTS["result_traceability"]
@@ -851,19 +864,59 @@ def _result_traceability(repo: RepoAnalysis) -> Criterion:
         )
 
     covered = len(repo.figures.covered)
-    floor = round(weight * covered / total)
+    ceiling = round(weight * covered / total)
     basis.append(f"{covered} of {total} published figures have a script named for them")
     for number, source in repo.figures.scripts:
         basis.append(f"figure {number} <- {source}")
     if repo.figures.uncovered:
         basis.append(f"no script for figure(s) {', '.join(str(n) for n in repo.figures.uncovered)}")
+
+    traced = _figures_traced(graph)
+    if traced is None:
+        # No graph to consult. The floor stays at the mapping rather than
+        # dropping to zero, because an absent channel is not evidence.
+        return Criterion(
+            name="result_traceability",
+            weight=weight,
+            floor=ceiling,
+            ceiling=ceiling,
+            basis=basis,
+        )
+
+    floor = min(ceiling, round(weight * len(traced) / total))
+    if traced:
+        basis.append(
+            f"{len(traced)} traced end to end to data that is present: "
+            f"{', '.join(f'figure {n}' for n in traced)}"
+        )
+    else:
+        basis.append("none of them reaches data this audit could check")
     return Criterion(
         name="result_traceability",
         weight=weight,
         floor=floor,
-        ceiling=floor,
+        ceiling=ceiling,
         basis=basis,
     )
+
+
+def _figures_traced(graph: dict | None) -> list[int] | None:
+    """Figure numbers the dependency graph walked to data it checked.
+
+    ``None`` when there is no graph to ask, which is not the same as none
+    traced: the first lowers no score, the second lowers the floor.
+    """
+    if not graph or not graph.get("assessable"):
+        return None
+    kinds = {node["id"]: node["kind"] for node in graph.get("nodes", [])}
+    numbers: list[int] = []
+    for path in graph.get("paths", []):
+        if kinds.get(path["start"]) != "result" or path["verdict"] != "satisfied":
+            continue
+        _, _, tail = path["start"].partition(":")
+        if tail.isdigit():
+            numbers.append(int(tail))
+    return sorted(numbers)
 
 
 # --------------------------------------------------------------------------- #

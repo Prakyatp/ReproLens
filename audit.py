@@ -389,7 +389,16 @@ def audit(
     dependency_graph = graph_build.build(repo.to_dict(), resolutions=resolutions.to_dict())
     warnings += dependency_graph.notes
 
-    assessment = assess(pages, findings, checklist, repo, merged, resolutions, supplements)
+    assessment = assess(
+        pages,
+        findings,
+        checklist,
+        repo,
+        merged,
+        resolutions,
+        supplements,
+        dependency_graph.to_dict(),
+    )
 
     report = {
         "paper_id": paper_id,
