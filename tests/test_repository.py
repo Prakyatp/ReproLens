@@ -327,6 +327,20 @@ class TestExecution:
         assert "bowtie2" not in {t.tool for t in found.tools_called}
 
 
+class TestShellThatReachesTheRNamedArgumentRule:
+    def test_an_assignment_to_a_command_substitution_carries_no_value(self, tmp_path):
+        # The R named-argument branch is entered on "has a paren, does not
+        # start with a dash", which shell satisfies. MATES's four
+        # barcode-splitting scripts each write IFS="$(printf '\t')", and each
+        # reported a flag `IFS` valued `$` -- a third of that paper's valued
+        # flags, and not a parameter of anything. The shell branch already
+        # refused a value containing "$" for the same reason; this applies the
+        # rule on both sides of the seam.
+        call = """paste "$1" | while IFS="$(printf '\t')" read -r line; do :; done"""
+        _, _, found = read_all(tmp_path, {"scripts/split_bc.sh": f"#!/bin/bash\n{call}\n"})
+        assert [f.value for f in found.flags if f.flag == "IFS"] == [None]
+
+
 class TestComparingTheRepositoryWithThePaper:
     def test_a_published_figure_with_no_script_is_found(self, tmp_path):
         # LocusMasterTE_paper holds fig1, fig3, fig4 and fig5. The paper has
