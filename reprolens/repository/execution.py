@@ -475,8 +475,13 @@ def _flags(command: str, source: str) -> list[Flag]:
             # A bare identifier is a reference to something defined elsewhere,
             # not a value: "min_cells = 5" documents a parameter and
             # "genes.excl = genes2remove" documents only that one is passed.
-            # Same rule as a shell flag whose value is "$VAR".
-            if value and _BARE_IDENTIFIER.fullmatch(value):
+            # Same rule as a shell flag whose value is "$VAR" -- and the "$"
+            # half of that rule has to be applied here too, because this branch
+            # also sees shell. Its guard is only "has a paren, does not start
+            # with a dash", which `IFS="$(printf '\t')"` satisfies: MATES's four
+            # barcode-splitting scripts each reported a flag `IFS` valued `$`,
+            # and those four were a third of the paper's valued flags.
+            if value and (_BARE_IDENTIFIER.fullmatch(value) or "$" in value):
                 value = None
             out.append(Flag(flag=match.group(1), value=value or None, source=source))
     for match in _FLAG_WITH_VALUE.finditer(command):
