@@ -49,7 +49,7 @@ from reprolens.discovery.patterns import normalize_with_offsets
 from reprolens.documents.base import PageText
 from reprolens.documents.sections import SectionLabel, resolve
 
-Kind = str  # "tool" | "library" | "reference"
+Kind = str  # "tool" | "library" | "reference" | "database" | "language" | "environment"
 
 Specificity = str  # "pinned" | "deferred_to_citation" | "named_only"
 
@@ -173,6 +173,83 @@ _SOFTWARE: tuple[tuple[str, Kind, str | None], ...] = (
     ("RepBase", "reference", None),
     ("Dfam", "reference", None),
     ("UCSC", "reference", None),
+    # --- materials science ---------------------------------------------------
+    # The vocabulary above is computational biology only, and the consequence
+    # was measurable: ALIGNN named 1 tool (PyTorch) and Atomate2 named 1
+    # (Python), against ASPEN's 16. Both papers were scored for environment
+    # specification and parameters as though they had declared almost nothing,
+    # which is a defect in this module rather than a property of the papers.
+    #
+    # Every name below was mined from the two papers' own text rather than
+    # recalled, and the ones that collide with English or with a metric were
+    # dropped or disambiguated after measuring them against all five papers.
+    # Dropped: GAP (a Gaussian Approximation Potential, and also "band gap",
+    # 5 hits in ALIGNN and 14 in Atomate2), SCAN (also an
+    # exchange-correlation functional and an English verb), MP (also an
+    # author's initials in LocusMasterTE's reference list), NOMAD (in
+    # Atomate2 it is only an author affiliation, "The NOMAD Laboratory").
+    # --- simulation engines --------------------------------------------------
+    ("VASP", "tool", None),
+    ("ABINIT", "tool", None),
+    ("CP2K", "tool", None),
+    ("FHI-aims", "tool", None),
+    ("JDFTx", "tool", None),
+    ("Quantum ESPRESSO", "tool", None),
+    ("OpenMM", "tool", None),
+    # --- post-processing -----------------------------------------------------
+    ("LobsterPy", "library", None),
+    ("LOBSTER", "tool", None),
+    ("BoltzTraP", "tool", None),
+    ("AMSET", "tool", None),
+    ("hiPhive", "tool", None),
+    ("phonopy", "tool", None),
+    ("Wannier90", "tool", r"\bWannier\s*90\b"),
+    # --- workflow and data infrastructure ------------------------------------
+    ("pymatgen", "library", None),
+    ("jobflow", "library", None),
+    ("custodian", "library", None),
+    ("emmet", "library", None),
+    ("spglib", "library", None),
+    ("MPMorph", "library", None),
+    ("FireWorks", "library", None),
+    ("AiiDA", "library", None),
+    ("AFLOW", "library", None),
+    ("MongoDB", "tool", None),
+    # "ASE" alone is not usable: it is Allele-Specific Expression in ASPEN,
+    # 12 occurrences, in the domain this module started in. So the Atomic
+    # Simulation Environment is matched only where the paper spells it out or
+    # introduces the abbreviation in parentheses.
+    (
+        "Atomic Simulation Environment",
+        "library",
+        r"\bAtomic\s+Simulation\s+Environment\b|\(ASE[\s\),;]",
+    ),
+    # --- machine-learned potentials and graph networks -----------------------
+    ("CHGNet", "library", None),
+    ("M3GNet", "library", None),
+    ("NequIP", "library", None),
+    ("MACE", "library", None),
+    ("iCGCNN", "library", None),
+    ("CGCNN", "library", None),
+    ("SchNet", "library", None),
+    ("MEGNet", "library", None),
+    # The "++" cannot take a trailing \b: "DimeNet++ " ends on a non-word
+    # character followed by a space, so the boundary never matches.
+    ("DimeNet++", "library", r"\bDimeNet\s*\+\+"),
+    ("DimeNet", "library", None),
+    ("OrbNet", "library", None),
+    ("DGL", "library", None),
+    ("PyTorch Ignite", "library", r"\bpytorch[-\s]ignite\b"),
+    # --- reference databases -------------------------------------------------
+    # A queryable record collection, not a sequence to align against, so the
+    # issue it raises when unversioned is phrased for what it is.
+    ("JARVIS-DFT", "database", None),
+    ("JARVIS-Tools", "library", None),
+    ("JARVIS", "database", None),
+    ("Materials Project", "database", None),
+    ("MatPES", "database", None),
+    ("OQMD", "database", None),
+    ("QM9", "database", None),
     # --- language and environment -------------------------------------------
     # The rubric scores environment specification separately, and here absence
     # is the finding: a paper that never names a language version, an

@@ -256,10 +256,32 @@ documents only that one is passed. Same rule as a shell flag whose value is
 `$VAR`.
 
 Still open from the probe: an R call that spans several lines is read only as
-far as its first line, so parameters on continuation lines are missed. And the
-vocabulary ceiling on paper four is still unknown — a fixed list of 76 names is
-the wrong long-term answer, and replacing it needs a model proposing names with
-the text available to check them against.
+far as its first line, so parameters on continuation lines are missed.
+
+The vocabulary ceiling has since been measured on two materials-science
+papers, and it was the whole story: ALIGNN named **1** tool and Atomate2 **1**,
+against ASPEN's 16. Both were scored for environment specification and
+parameters as though they had declared almost nothing. Adding 45 materials
+names — mined from the two papers' text rather than recalled — takes them to 15
+and 31, and the two annotated biology papers do not move at all.
+
+Three of the names could not simply be added, and measuring said so:
+
+| name | why it was dropped |
+| --- | --- |
+| `GAP` | a Gaussian Approximation Potential, and also *band gap* — 5 hits in ALIGNN, 14 in Atomate2 |
+| `SCAN` | also an exchange-correlation functional, and an English verb |
+| `MP` | also an author's initials in LocusMasterTE's reference list |
+| `NOMAD` | in Atomate2 it appears only as an author affiliation |
+
+`ASE` is the one collision that crosses the two fields: in ASPEN it is
+allele-specific expression, 12 occurrences. The Atomic Simulation Environment is
+therefore matched only where a paper spells the name out or introduces the
+abbreviation in parentheses, which costs mention counts and never misfires.
+
+A fixed list is still the wrong long-term answer — two fields in and the list is
+121 names — and replacing it needs a model proposing names with the text
+available to check them against.
 
 ## The report
 

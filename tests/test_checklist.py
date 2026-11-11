@@ -196,3 +196,78 @@ class TestTheVocabularyCeiling:
         # a vocabulary entry that matches running text turns every paper in the
         # field into a false positive.
         assert find_names("Reads were scattered across the scaffold and rescued.") == []
+
+
+class TestTheMaterialsScienceVocabulary:
+    """A second field, and the collisions that a second field creates.
+
+    The vocabulary was computational biology only, and the cost was measurable:
+    ALIGNN named 1 tool and Atomate2 named 1, against ASPEN's 16. Both papers
+    were then scored as though they had declared almost nothing. These cases are
+    the names that could not simply be added.
+    """
+
+    def test_the_materials_names_are_found(self):
+        text = (
+            "Band gaps were computed with VASP and post-processed with BoltzTraP. "
+            "Training data came from JARVIS-DFT and the Materials Project, and the "
+            "baselines were CGCNN, SchNet, MEGNet and DimeNet++ in DGL."
+        )
+        assert set(find_names(text)) >= {
+            "VASP",
+            "BoltzTraP",
+            "JARVIS-DFT",
+            "Materials Project",
+            "CGCNN",
+            "SchNet",
+            "MEGNet",
+            "DimeNet++",
+            "DGL",
+        }
+
+    def test_ase_alone_is_allele_specific_expression(self):
+        # The one collision that crosses the two fields. ASPEN writes "variations
+        # in ASE across continuous trajectories", 12 occurrences, and it means
+        # allele-specific expression. So the Atomic Simulation Environment is
+        # matched only where a paper spells it out or introduces the
+        # abbreviation, which Atomate2 does: "Atomic Simulation Environment (ASE)".
+        assert find_names("a linear mixed model to detect variations in ASE across cells") == []
+        assert find_names("built on the Atomic Simulation Environment (ASE) and pymatgen") == [
+            "pymatgen",
+            "Atomic Simulation Environment",
+        ]
+
+    def test_dimenet_keeps_its_plusses(self):
+        # "DimeNet++ " ends on a non-word character followed by a space, so a
+        # trailing \b never matches and the generated pattern found nothing.
+        # The two entries also have to not both fire, the same span-claiming
+        # rule that keeps "STAR" out of "STARsolo".
+        checklist = build([page("DimeNet++ was trained for 300 epochs.")])
+        assert [s.name for s in checklist.software] == ["DimeNet++"]
+        assert [s.name for s in build([page("DimeNet used radial bases.")]).software] == [
+            "DimeNet"
+        ]
+
+    def test_the_names_that_collide_with_prose_were_left_out(self):
+        # Each of these is real materials software and each was dropped after
+        # measuring it: GAP is also "band gap" (5 hits in ALIGNN, 14 in
+        # Atomate2), SCAN is also an exchange-correlation functional and a verb,
+        # MP is also an author's initials in LocusMasterTE's reference list, and
+        # NOMAD appears in Atomate2 only as an author affiliation.
+        text = (
+            "the band gap value converged within the GW framework; functionals "
+            "like PBE or SCAN are required; we scan the Materials project (MP) "
+            "records; the NOMAD Laboratory, Fritz-Haber-Institut"
+        )
+        assert find_names(text) == ["Materials Project"]
+
+    def test_a_database_named_without_a_version_is_its_own_gap(self):
+        # Severity equal to an unspecified reference genome, for the same
+        # reason -- a growing collection returns a different set of records each
+        # time it is queried -- but worded for something queried rather than
+        # aligned against.
+        checklist = build([page("Formation energies were taken from JARVIS-DFT.")])
+        found = item(checklist, "JARVIS-DFT")
+        assert found.kind == "database"
+        assert found.specificity == "named_only"
+        assert found in checklist.gaps()

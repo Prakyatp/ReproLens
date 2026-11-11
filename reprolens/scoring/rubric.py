@@ -1001,6 +1001,15 @@ def _issues(
                     item.evidence,
                 )
             )
+        elif item.kind == "database":
+            # The same severity as an unspecified reference genome, and for the
+            # same reason: a record collection that is versioned and growing
+            # identifies a different set of records each time it is queried.
+            # Phrased separately because a materials database is queried, not
+            # aligned against, and the genome wording would misdescribe it.
+            issues.append(
+                Issue("major", "reference database version unspecified", item.name, item.evidence)
+            )
         elif item.kind in ("tool", "language"):
             issues.append(Issue("major", "software version missing", item.name, item.evidence))
         else:
