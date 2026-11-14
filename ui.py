@@ -1,28 +1,33 @@
-"""The audit, read by a person.
+"""ReproLens — drop a paper in, get what a reproduction of it needs.
 
     uv run streamlit run ui.py
 
-A viewer over what ``audit.py`` already wrote to ``output/<paper>/``. It runs no
-extraction of its own, which keeps one rule easy to hold: there is exactly one
-place where a finding can be produced, and it is not here. If a number appears
-on this page it came out of a JSON file on disk, and the page says which one.
+One page. A paper goes in; the audit runs; the result comes out. Nothing is
+kept: the upload and its output live in a temporary directory for the length of
+the session, so the page carries no library of papers and no state from the last
+visitor.
+
+It runs no extraction of its own. Every number here came out of a JSON file that
+``audit.py`` wrote, which keeps one rule easy to hold: there is exactly one
+place a finding can be produced, and this is not it.
 
 The thing this view exists to get right is the **band**. Every score in this
 project is a floor and a ceiling: the floor is what the paper definitely
-documents, the ceiling is what it might. A single number would be a lie in
-either direction -- it would read as precision the evidence does not support,
-and it would hide the distinction the whole tool is built on, which is that a
-paper loses points for what it did not say and never for what the reader could
-not determine. So nothing here collapses a band, and "not assessed" is drawn as
-its own state rather than as a zero.
+documents, the ceiling what it might. A single number would read as precision
+the evidence does not support and would hide the distinction the whole tool is
+built on -- that a paper loses points for what it did not say and never for what
+the reader could not determine. So nothing here collapses a band, and "not
+assessed" is drawn as its own state rather than as a zero.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -30,7 +35,11 @@ import streamlit as st
 from reprolens.discovery.patterns import archive_url
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT = ROOT / "output"
+
+# Where the current paper's audit lives, for this session only.
+RESULT = "result_dir"
+NAME = "paper_name"
+WORKDIR = "work_dir"
 
 SEVERITY_ORDER = ("hard_blocker", "major", "minor")
 SEVERITY_LABEL = {
@@ -60,17 +69,13 @@ VERDICT_HELP = {
 }
 
 
-def papers() -> list[str]:
-    if not OUTPUT.is_dir():
-        return []
-    return sorted(p.name for p in OUTPUT.iterdir() if (p / "assessment.json").is_file())
-
-
-def load(paper: str, name: str) -> dict | None:
-    path = OUTPUT / paper / f"{name}.json"
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text())
+def load(name: str) -> dict:
+    """One artifact of the current audit, or ``{}`` if it was not written."""
+    directory = st.session_state.get(RESULT)
+    if not directory:
+        return {}
+    path = Path(directory) / f"{name}.json"
+    return json.loads(path.read_text()) if path.is_file() else {}
 
 
 def band(floor: int, ceiling: int, total: int, *, height: int = 26) -> str:
@@ -211,94 +216,140 @@ def _item(
             )
 
 
-def _run(source: str) -> None:
-    """Run the audit on one document, surfacing its own failure verbatim.
+def find_result(out: Path) -> Path | None:
+    """The directory ``audit.py`` wrote its artifacts into.
 
-    Resolution is left ON. With lookups disabled every dataset comes back
-    "unchecked", and this page's whole job is to say what is *not available* --
-    a claim that cannot be made without asking the archive. Figure reading is
-    left off, because it needs a vision backend that may not be running, and a
-    missing backend should not fail an audit.
+    It names that directory after the document's stem rather than anything the
+    caller chose, so the caller has to look. A directory without
+    ``assessment.json`` is not a result: the audit can write a partial reading
+    and still refuse to score it, and showing that as a result would present
+    "could not be read" as "nothing was found".
     """
-    with st.spinner(f"auditing {source} \u2026 this takes a minute"):
-        done = subprocess.run(  # noqa: S603 -- fixed argv, path chosen from disk
-            [sys.executable, str(ROOT / "audit.py"), source, "--out", str(OUTPUT), "--no-vlm"],
+    if not out.is_dir():
+        return None
+    produced = sorted(path for path in out.iterdir() if (path / "assessment.json").is_file())
+    return produced[0] if produced else None
+
+
+def _process(upload) -> None:
+    """Audit one uploaded document in a directory of its own.
+
+    The upload goes into its own empty directory and is passed to ``audit.py``
+    by path. Nothing in it is ever executed -- Python is parsed with ``ast`` and
+    everything else is read as text -- and nothing is kept: the whole working
+    directory is removed when the next paper is dropped.
+
+    Archive lookups are left ON. With them off every dataset comes back
+    "unchecked", and a page whose job is to say what is *not available* cannot
+    make that claim without asking the archive. Figure reading is left off: it
+    needs a vision backend that may not be running, and a missing backend
+    should not fail an audit.
+    """
+    _discard()
+    workdir = Path(tempfile.mkdtemp(prefix="reprolens-"))
+    incoming = workdir / "incoming"
+    incoming.mkdir()
+    source = incoming / Path(upload.name).name
+    source.write_bytes(upload.getbuffer())
+    out = workdir / "out"
+
+    with st.status(f"Reading {upload.name} …", expanded=True) as status:
+        st.write("extracting text, links and figures")
+        st.write("cloning the repositories the paper points at")
+        st.write("asking the archives whether each dataset is there")
+        done = subprocess.run(  # noqa: S603 -- fixed argv, path written by us
+            [sys.executable, str(ROOT / "audit.py"), str(source), "--out", str(out), "--no-vlm"],
             capture_output=True,
             text=True,
             cwd=ROOT,
         )
-    if done.returncode == 0:
-        st.success("done")
-        st.rerun()
-    else:
-        # In full rather than summarised: a failed audit is the one case where
-        # the tool's own output is the finding.
-        st.error("the audit failed")
-        st.code((done.stderr or done.stdout)[-3000:])
+        if done.returncode != 0:
+            # In full rather than summarised: a failed audit is the one case
+            # where the tool's own output is the finding.
+            status.update(label="The audit failed", state="error")
+            st.code((done.stderr or done.stdout)[-4000:])
+            shutil.rmtree(workdir, ignore_errors=True)
+            return
+        status.update(label=f"Audited {upload.name}", state="complete")
+
+    produced = find_result(out)
+    if produced is None:
+        st.error("The audit wrote no assessment. Nothing below would be evidence.")
+        shutil.rmtree(workdir, ignore_errors=True)
+        return
+
+    st.session_state[WORKDIR] = str(workdir)
+    st.session_state[RESULT] = str(produced)
+    st.session_state[NAME] = upload.name
+    st.rerun()
+
+
+def _discard() -> None:
+    """Forget the current paper, and take its files with it."""
+    workdir = st.session_state.pop(WORKDIR, None)
+    if workdir:
+        shutil.rmtree(workdir, ignore_errors=True)
+    st.session_state.pop(RESULT, None)
+    st.session_state.pop(NAME, None)
+
+
+def _landing() -> None:
+    """The whole product before a paper arrives: one place to drop one."""
+    st.markdown("<div style='height:7vh'></div>", unsafe_allow_html=True)
+    left, middle, right = st.columns([1, 2, 1])
+    with middle:
+        st.markdown(
+            "<h1 style='text-align:center;margin-bottom:0'>ReproLens</h1>"
+            "<p style='text-align:center;color:#666;font-size:1.05rem;margin-top:0.4rem'>"
+            "Drop a paper in. Find out what reproducing it would need, "
+            "and what the paper never says.</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='height:1.5vh'></div>", unsafe_allow_html=True)
+
+        upload = st.file_uploader(
+            "Drop a paper here",
+            type=["pdf", "xml"],
+            help="A journal PDF, or a JATS XML full text.",
+        )
+        if upload is not None:
+            _process(upload)
+
+        st.markdown(
+            "<p style='text-align:center;color:#888;font-size:0.82rem;margin-top:1.2rem'>"
+            "Nothing is stored. The paper and its audit are deleted when you leave "
+            "or drop another.<br>Nothing in a fetched repository is ever executed."
+            "</p>",
+            unsafe_allow_html=True,
+        )
 
 
 def main() -> None:
-    st.set_page_config(page_title="ReproLens", page_icon="🔬", layout="wide")
+    st.set_page_config(page_title="ReproLens", page_icon="\U0001f52c", layout="wide")
+    if st.session_state.get(RESULT):
+        _results()
+    else:
+        _landing()
 
-    available = papers()
-    with st.sidebar:
-        st.title("ReproLens")
-        st.caption("What a reproduction of this paper needs, and what is missing.")
 
-        if not available:
-            st.warning("No audits in `output/` yet.")
-        paper = st.selectbox("Audited paper", available) if available else None
+def _results() -> None:
+    assessment = load("assessment")
+    links = load("links")
+    checklist = load("checklist")
 
-        st.divider()
-        st.subheader("Audit a paper")
-
-        uploaded = st.file_uploader("Upload a paper", type=["pdf", "xml"])
-        if uploaded is not None:
-            # Saved under data/ rather than a temp directory, so the audit stays
-            # reproducible from the repo: a report whose source document has
-            # been deleted cannot be re-checked.
-            folder = "xml" if uploaded.name.lower().endswith(".xml") else "papers"
-            target = ROOT / "data" / folder / uploaded.name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(uploaded.getbuffer())
-            if st.button(f"Audit {uploaded.name}", type="primary", width="stretch"):
-                _run(str(target.relative_to(ROOT)))
-
-        # Only the two directories papers live in. A recursive sweep of data/
-        # also offered jarvis's VASP test fixtures and MATES's vendored figure
-        # PDF -- eighteen entries, three of them papers.
-        sources = sorted(
-            str(path.relative_to(ROOT))
-            for directory, suffix in (("papers", "*.pdf"), ("xml", "*.xml"))
-            for path in (ROOT / "data" / directory).glob(suffix)
-        )
-        if sources:
-            st.caption("or audit one already in `data/`")
-            source = st.selectbox("Source document", sources, label_visibility="collapsed")
-            if st.button("Run audit", width="stretch"):
-                _run(source)
-
+    heading, action = st.columns([5, 1])
+    with heading:
+        st.markdown(f"## {st.session_state.get(NAME, 'Result')}")
         st.caption(
-            "Archive lookups are on, so a dataset can be reported as missing "
-            "rather than merely unchecked."
+            f"read by {links.get('backend', 'unknown')} \u00b7 "
+            f"{links.get('n_segments', '?')} segment(s) \u00b7 "
+            f"rubric {assessment.get('rubric_version', '?')}"
         )
-
-    if not paper:
-        st.info("Audit a paper from the sidebar to begin.")
-        return
-
-    assessment = load(paper, "assessment")
-    links = load(paper, "links") or {}
-    if assessment is None:
-        st.error(f"`output/{paper}/assessment.json` is missing.")
-        return
-
-    st.title(paper)
-    source = links.get("source", "")
-    st.caption(
-        f"`{source}` · read by {links.get('backend', 'unknown')} · "
-        f"{links.get('n_segments', '?')} segment(s) · rubric {assessment['rubric_version']}"
-    )
+    with action:
+        st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)
+        if st.button("Another paper", width="stretch"):
+            _discard()
+            st.rerun()
 
     for warning in links.get("warnings", []):
         # A warning leads, always. "Found nothing" and "could not read it" are
@@ -308,11 +359,10 @@ def main() -> None:
     _headline(assessment)
     st.divider()
 
-    checklist = load(paper, "checklist") or {}
-    missing, present, criteria, graph, provenance = st.tabs(
+    missing, present, criteria, graph, report = st.tabs(
         [
-            f"⚠ Not available ({_count_missing(assessment, links)})",
-            f"✓ Present ({_count_present(assessment, links, checklist)})",
+            f"\u26a0 Not available ({_count_missing(assessment, links)})",
+            f"\u2713 Present ({_count_present(assessment, links, checklist)})",
             "Score detail",
             "Dependencies",
             "Full report",
@@ -325,9 +375,9 @@ def main() -> None:
     with criteria:
         _criteria(assessment)
     with graph:
-        _graph(load(paper, "graph") or {})
-    with provenance:
-        _report(paper)
+        _graph(load("graph"))
+    with report:
+        _report()
 
 
 def _headline(assessment: dict) -> None:
@@ -572,18 +622,20 @@ def _graph(graph: dict) -> None:
         st.caption(note)
 
 
-def _report(paper: str) -> None:
-    path = OUTPUT / paper / "report.md"
-    if not path.is_file():
-        st.info("No `report.md` for this paper.")
+def _report() -> None:
+    directory = st.session_state.get(RESULT)
+    path = Path(directory) / "report.md" if directory else None
+    if path is None or not path.is_file():
+        st.info("No full report was written for this paper.")
         return
+    text = path.read_text()
     st.download_button(
         "Download report.md",
-        path.read_text(),
-        file_name=f"{paper}-report.md",
+        text,
+        file_name=f"{Path(st.session_state.get(NAME, 'paper')).stem}-report.md",
         mime="text/markdown",
     )
-    st.markdown(path.read_text())
+    st.markdown(text)
 
 
 if __name__ == "__main__":

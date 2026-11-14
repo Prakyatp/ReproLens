@@ -1,92 +1,160 @@
-"""The viewer, actually run.
+"""The product, actually run.
 
 A Streamlit page renders in the browser, so importing it proves nothing and
-curl against a live server proves slightly less: the first version of this UI
+curl against a live server proves slightly less: an early version of this UI
 returned HTTP 200 while raising ``TypeError: unhashable type: 'slice'`` on
-every paper, because it read ``by_role`` as a list of findings when it is a
-map of counts. ``AppTest`` executes the script the way the runtime does and
+every paper, because it read ``by_role`` as a list of findings when it is a map
+of counts. ``AppTest`` executes the script the way the runtime does and
 collects what it raised, which is the only check that would have caught that.
 
-Each paper is its own case. The five differ in the ways that break a viewer --
-ALIGNN has no resolved datasets, LocusMasterTE has a hard blocker where the
-others have none, atomate2's graph is large, ASPEN comes from XML rather than
-a PDF -- and a page that renders one of them is not a page that renders five.
+The page has two states and both are tested: the landing page, which is the
+whole product before a paper arrives, and the result, seeded from an audit on
+disk because ``AppTest`` cannot drive a file uploader.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "ui.py"
-OUTPUT = ROOT / "output"
 
 AppTest = pytest.importorskip("streamlit.testing.v1", reason="streamlit is not installed").AppTest
 
+# Audits produced by running audit.py locally. They are not committed (output/
+# is ignored), so every test that needs one skips without it rather than
+# inventing a shape the app would never actually be handed.
+AUDITS = ROOT / "output"
 
-def audited() -> list[str]:
-    if not OUTPUT.is_dir():
-        return []
-    return sorted(p.name for p in OUTPUT.iterdir() if (p / "assessment.json").is_file())
+
+def an_audit() -> Path | None:
+    if not AUDITS.is_dir():
+        return None
+    found = sorted(p for p in AUDITS.iterdir() if (p / "assessment.json").is_file())
+    return found[0] if found else None
 
 
-def run(paper: str | None = None):
+def landing():
     app = AppTest.from_file(str(UI), default_timeout=120)
     app.run()
-    if paper is not None:
-        app.selectbox[0].select(paper).run()
     return app
 
 
-@pytest.mark.parametrize("paper", audited() or ["<none audited>"])
-def test_each_audited_paper_renders(paper):
-    if paper == "<none audited>":
-        pytest.skip("no audits in output/; run audit.py first")
-    app = run(paper)
-    assert not app.exception, [str(e.value) for e in app.exception]
-    assert paper in [t.value for t in app.title]
-
-
-def test_the_band_is_never_collapsed_to_one_number():
-    # The band is the product's whole thesis: the floor is what the paper
-    # documents, the gap is what could not be determined, and a single number
-    # would hide the difference. So the headline has to print both.
-    papers = audited()
-    if not papers:
-        pytest.skip("no audits in output/")
-    app = run(papers[0])
-    import json
-
-    assessment = json.loads((OUTPUT / papers[0] / "assessment.json").read_text())
-    headline = " ".join(m.value for m in app.markdown)
-    assert f"{assessment['score_floor']}–{assessment['score_ceiling']}" in headline
-
-
-def test_a_warning_from_the_reader_is_shown():
-    # "Found nothing" and "could not read it" are different claims and only one
-    # is about the paper, so a reader warning must reach the page rather than
-    # being summarised away.
-    papers = audited()
-    if not papers:
-        pytest.skip("no audits in output/")
-    import json
-
-    for paper in papers:
-        warnings = json.loads((OUTPUT / paper / "links.json").read_text()).get("warnings", [])
-        if warnings:
-            app = run(paper)
-            assert any(w in " ".join(x.value for x in app.warning) for w in warnings)
-            return
-    pytest.skip("none of the audited papers produced a reader warning")
-
-
-def test_with_no_output_at_all_it_says_so_rather_than_crashing():
+def showing(result: Path):
     app = AppTest.from_file(str(UI), default_timeout=120)
-    app.secrets["_"] = ""
+    app.session_state["result_dir"] = str(result)
+    app.session_state["paper_name"] = f"{result.name}.pdf"
     app.run()
-    assert not app.exception
+    return app
+
+
+class TestTheLandingPage:
+    def test_it_renders_one_place_to_drop_a_paper(self):
+        app = landing()
+        assert not app.exception, [str(e.value) for e in app.exception]
+        assert len(app.file_uploader) == 1
+
+    def test_it_offers_no_library_of_papers(self):
+        # The product is a page you drop a paper into. An earlier version listed
+        # the five papers this project was developed against, which were the
+        # author's own verification set and have no business in the product.
+        app = landing()
+        assert app.selectbox.values == []
+
+    def test_it_says_that_nothing_is_kept(self):
+        app = landing()
+        text = " ".join(m.value for m in app.markdown)
+        assert "Nothing is stored" in text
+        assert "is ever executed" in text
+
+
+class TestTheResult:
+    def test_it_renders_without_raising(self):
+        result = an_audit()
+        if result is None:
+            pytest.skip("no audit in output/; run audit.py first")
+        app = showing(result)
+        assert not app.exception, [str(e.value) for e in app.exception]
+
+    def test_the_band_is_never_collapsed_to_one_number(self):
+        # The band is the product's whole thesis: the floor is what the paper
+        # documents, the gap is what could not be determined, and a single
+        # number would hide the difference.
+        result = an_audit()
+        if result is None:
+            pytest.skip("no audit in output/")
+        assessment = json.loads((result / "assessment.json").read_text())
+        text = " ".join(m.value for m in showing(result).markdown)
+        assert f"{assessment['score_floor']}–{assessment['score_ceiling']}" in text
+
+    def test_a_reader_warning_leads_the_page(self):
+        # "Found nothing" and "could not read it" are different claims and only
+        # one is about the paper, so a reader warning must reach the page.
+        if not AUDITS.is_dir():
+            pytest.skip("no audits in output/")
+        for result in sorted(AUDITS.iterdir()):
+            if not (result / "links.json").is_file():
+                continue
+            warnings = json.loads((result / "links.json").read_text()).get("warnings", [])
+            if warnings:
+                app = showing(result)
+                shown = " ".join(w.value for w in app.warning)
+                assert any(warning in shown for warning in warnings)
+                return
+        pytest.skip("none of the local audits produced a reader warning")
+
+    def test_every_tab_count_matches_its_panel(self):
+        # The tab read "Present (0)" above a panel listing six repositories,
+        # because the count omitted most of what the panel renders.
+        import ui
+
+        if not AUDITS.is_dir():
+            pytest.skip("no audits in output/")
+        for result in sorted(AUDITS.iterdir()):
+            if not (result / "assessment.json").is_file():
+                continue
+            links = json.loads((result / "links.json").read_text())
+            checklist = json.loads((result / "checklist.json").read_text())
+            assessment = json.loads((result / "assessment.json").read_text())
+            repositories = [
+                f for f in links.get("findings", []) if f.get("kind") in ("github", "gitlab")
+            ]
+            if repositories:
+                count = ui._count_present(assessment, links, checklist)
+                assert count >= len(repositories), result.name
+
+
+class TestFindingWhatTheAuditWrote:
+    def test_it_looks_for_the_directory_audit_py_chose(self, tmp_path):
+        # audit.py names the output directory after the document's stem, not
+        # after anything the caller passed, so the caller has to look.
+        import ui
+
+        produced = tmp_path / "dropped"
+        produced.mkdir()
+        (produced / "assessment.json").write_text("{}")
+        assert ui.find_result(tmp_path) == produced
+
+    def test_a_directory_without_an_assessment_is_not_a_result(self, tmp_path):
+        # The audit can write a partial reading and still refuse to score it.
+        # Showing that as a result would present "could not be read" as
+        # "nothing was found", which is the one confusion this project exists
+        # to prevent.
+        import ui
+
+        partial = tmp_path / "dropped"
+        partial.mkdir()
+        (partial / "links.json").write_text("{}")
+        assert ui.find_result(partial) is None
+        assert ui.find_result(tmp_path) is None
+
+    def test_a_missing_output_directory_is_not_an_error(self, tmp_path):
+        import ui
+
+        assert ui.find_result(tmp_path / "never-written") is None
 
 
 class TestTheLinkThePaperGave:
@@ -117,10 +185,10 @@ class TestTheLinkThePaperGave:
         # Where it actually lives. MATES's Data availability statement writes
         # "(GSE212945, https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=
         # GSE212945)" for 5 of its 10 accessions, and NONE of those URLs
-        # survives as a separate `url` finding -- the accession pattern claims
-        # the span first. Comparing the accession list against the url list
-        # therefore reports that no paper links anything, which is exactly how
-        # this was missed the first time round.
+        # survives as a separate `url` finding, because the accession pattern
+        # claims the span first. Comparing the accession list against the url
+        # list therefore reports that no paper links anything -- which is what
+        # I concluded the first time, and it was wrong.
         url, how = self.link(
             value="GSE212945",
             kind="geo_series",
@@ -154,24 +222,3 @@ class TestTheLinkThePaperGave:
             occurrences=[{"page": 1, "context": "(GSE1, https://x.org/acc?a=GSE1) and then"}],
         )
         assert url == "https://x.org/acc?a=GSE1"
-
-
-class TestTheTabCountsMatchTheirPanels:
-    def test_present_counts_everything_the_panel_lists(self):
-        # atomate2 pins no version and deposits no dataset, so an earlier
-        # version labelled its tab "Present (0)" above a panel listing six
-        # repositories.
-        import json
-
-        import ui
-
-        for paper in audited():
-            links = json.loads((OUTPUT / paper / "links.json").read_text())
-            checklist = json.loads((OUTPUT / paper / "checklist.json").read_text())
-            assessment = json.loads((OUTPUT / paper / "assessment.json").read_text())
-            count = ui._count_present(assessment, links, checklist)
-            repositories = [
-                f for f in links.get("findings", []) if f.get("kind") in ("github", "gitlab")
-            ]
-            if repositories:
-                assert count >= len(repositories), paper
