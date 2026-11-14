@@ -57,6 +57,38 @@ An unreadable page is reported as unreadable, never as empty. For a tool whose
 purpose is detecting what a paper failed to provide, conflating "found nothing"
 with "could not read it" is the worst available bug.
 
+### Two kinds of superscript
+
+The text layer is read span by span, because `get_text("text")` glues a raised
+reference number onto the token before it — MATES p20 turns
+`github.com/mcgilldinglab/MATES` + raised `90` into `.../MATES90`. Dropping
+every digit-shaped superscript fixes that and causes a worse problem, because
+the other thing a raised digit means is a power:
+
+| | before | after |
+| --- | --- | --- |
+| ASPEN p2 | `p < 2.22 × 10` | `p < 2.22 × 10^-16` |
+| MATES p4 | `P < 1 × 10` | `P < 1 × 10^-6` |
+| ALIGNN p21 | `weight decay of 10` | `weight decay of 10^-5` |
+
+**57 of MATES's 57 scientific-notation numbers were being printed with the
+exponent deleted**, and every one of them was a p-value. The values stayed
+plausible, which is what made it silent.
+
+Three signals separate the two, and between them they classify all 65
+superscript-after-a-digit occurrences in the three PDFs correctly: a power this
+module has already opened and not yet filled (publishers split `10⁻⁶` into two
+raised spans), a leading sign with digits after it (the only thing that
+identifies an exponent on a unit, `Vm⁻²`, where what precedes is a letter), and
+otherwise what the superscript is attached to — a power hangs off a number that
+no letter opens, a reference number hangs off a name. A name ending in a digit
+is what makes the simple rule fail: `QM9⁴⁶`, `CD74³⁷` and `Aldh18a1⁵⁷` are
+citations. `CD8⁺` is neither — a bare sign on a name stays the phenotype it is.
+
+Two occurrences in ASPEN are set as Unicode superscript glyphs in an unraised
+span (`10⁻⁸`) rather than as raised spans. Nothing is lost there; they are just
+not normalised to the `^` form.
+
 ## Sections, then roles
 
 An identifier tells you the kind of thing it is; it does not tell you what it is
