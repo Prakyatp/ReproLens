@@ -64,13 +64,35 @@ remaining eighteen. A Tier-2 record is about an hour: read the paper and its
 repository, fill in what is documented and what is missing, and score it.
 
 ```bash
-cp benchmark/tier2-template.json benchmark/papers/<paper_id>.json
-# edit it -- paper_id MUST equal the filename without .json
+uv run python scripts/prep_benchmark.py data/papers/<paper_id>.pdf \
+    --repo data/repos/<cached_clone> --url https://github.com/owner/name
+
+# then fill in benchmark/papers/<paper_id>.json, reading
+# benchmark/worksheets/<paper_id>.md
 
 uv run python check.py --validate-only      # before there is anything to grade
 uv run python audit.py data/papers/<paper_id>.pdf --out output/
 uv run python check.py --out output/
 ```
+
+`prep_benchmark.py` does the part of that hour that is not judgement. It writes
+a blank record skeleton and a **worksheet**: the paper's availability statements
+quoted verbatim with their page numbers, its section map, its figure and table
+captions, and the repository's layout, README and environment manifests. One
+paragraph instead of thirty pages.
+
+It deliberately contains **no findings** — no score, no severity, no resource
+verdict, not even an extracted accession. The record is the ground truth
+ReproLens is graded against, so a worksheet carrying the app's answers would
+make every agreement number a measurement of the tool against itself.
+`tests/test_prep_benchmark.py` enforces that by reading the script: it may not
+import the extraction layer or call the assessor, and the one thing it takes
+from the scoring layer is `WEIGHTS`, so the worksheet's weights cannot drift
+from the app's.
+
+A skeleton does not grade. Until it is filled in, `check.py` lists what is
+missing and excludes the paper — an unstarted annotation scored as seven zeros
+would otherwise produce a confident, normal-looking comparison against nothing.
 
 `--validate-only` is the step that makes this cheap. A record can be perfectly
 well-formed JSON and still be wrong in ways that produce a *normal-looking*
@@ -91,6 +113,12 @@ catches:
 - `paper_id` disagreeing with the filename, an empty pointer field, a tier that
   is neither 1 nor 2, a misspelled criterion name, `readiness_score` disagreeing
   with `total`.
+- **Any field still carrying the template's own placeholder text.** This is the
+  one the structural rules all miss: placeholder prose is non-empty, seven zeros
+  total zero correctly, and the template's example blocker is counted correctly
+  by the template's summary, so an untouched skeleton satisfies every other rule
+  here. Compared against `tier2-template.json` itself rather than a copied list
+  of phrases, so editing the template cannot leave a stale rule behind.
 
 Scoring is a judgement and the validator does not touch it. Score what the paper
 **documents**, before anyone tries to run it — that is the
@@ -99,6 +127,11 @@ someone actually tries (blueprint §5). The weights come from `WEIGHTS` in
 `reprolens/scoring/rubric.py`, so they cannot drift from the app's.
 
 ### Which fields a Tier-2 record needs
+
+`github` takes either one URL or a list of them. ALIGNN points at two
+repositories (`alignn` and `jarvis`) and ASPEN at two (the package and the
+manuscript); keeping only the first understates what a reproducer has to obtain,
+and understates it invisibly, because recall would still read 100%.
 
 Required: `paper_id`, `title`, `citation`, `github`, `data_accessions`,
 `annotation_provenance.tier`, `severity_summary`, `scoring_rubric_v0.1`.

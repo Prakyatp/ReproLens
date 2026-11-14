@@ -32,13 +32,35 @@ def record(**overrides) -> dict:
 
 
 class TestTheShippedRecords:
-    def test_every_record_in_the_benchmark_validates(self):
+    def test_every_finished_record_validates(self):
         # The validator's own ground truth: the two Tier-1 records were written
         # by hand before it existed, and it must not have been built to a shape
         # they fail.
+        #
+        # "Finished" is the qualifier, and it is not a loophole. Blank
+        # skeletons from scripts/prep_benchmark.py live in papers/ alongside
+        # real records and are *supposed* to fail -- that is how the annotator
+        # finds out what is left to fill, and check.py refuses to grade them.
+        # So this asserts the stronger thing: no record is failing for any
+        # reason other than being an unstarted skeleton.
+        import json
+
+        template = json.loads(check.TEMPLATE.read_text())
         papers, problems = check.read_records()
         assert papers
-        assert problems == {}
+
+        unexpected = {}
+        for paper_id, found in problems.items():
+            record = json.loads((check.BENCHMARK / f"{paper_id}.json").read_text())
+            if record.get("scoring_rubric_v0.1") == template.get("scoring_rubric_v0.1"):
+                continue  # an unstarted skeleton, failing exactly as designed
+            unexpected[paper_id] = found
+        assert unexpected == {}
+
+    def test_the_finished_records_are_still_there(self):
+        papers, problems = check.read_records()
+        for paper_id in ("locusmasterte", "mates"):
+            assert paper_id in papers and paper_id not in problems
 
 
 class TestABaselineRecordIsAccepted:
@@ -184,3 +206,89 @@ class TestIdentity:
     def test_accessions_must_be_a_list(self):
         problems = check.validate_record("example", record(data_accessions="GSE000001"))
         assert any("must be a list" in p for p in problems)
+
+
+class TestASkeletonNobodyHasFilledIn:
+    """The failure that arrived with the tooling meant to make annotating fast.
+
+    ``scripts/prep_benchmark.py`` writes a blank record per paper, and every
+    structural rule above is satisfied by one: placeholder prose is non-empty,
+    seven zeros total zero correctly, and the template's one example blocker is
+    counted correctly by the template's summary. So an unstarted annotation
+    validated clean and would have been graded against -- the comparison
+    looking entirely normal while measuring nothing.
+    """
+
+    def template(self) -> dict:
+        import json
+
+        return json.loads(check.TEMPLATE.read_text())
+
+    def test_an_untouched_skeleton_is_rejected(self):
+        problems = check.validate_record(
+            "CHANGEME-must-equal-this-file-s-name-without-json", self.template()
+        )
+        assert problems
+
+    def test_each_unfilled_field_is_named_separately(self):
+        # The validator doubles as the annotator's checklist, so one problem
+        # reading "this record is a template" would be worth less than six
+        # naming what to fill.
+        problems = " ".join(
+            check.validate_record(
+                "CHANGEME-must-equal-this-file-s-name-without-json", self.template()
+            )
+        )
+        for field in ("title", "citation", "data_accessions", "blockers", "annotators"):
+            assert field in problems
+        assert "scoring_rubric_v0.1" in problems
+
+    def test_it_points_at_the_worksheet(self):
+        record = self.template() | {"paper_id": "alignn"}
+        problems = " ".join(check.validate_record("alignn", record))
+        assert "benchmark/worksheets/alignn.md" in problems
+
+    def test_a_filled_field_stops_being_reported(self):
+        record = self.template() | {"title": "Atomistic Line Graph Neural Network"}
+        problems = " ".join(check.validate_record("x", record))
+        assert "title is still" not in problems
+        assert "citation is still" in problems
+
+    def test_a_real_record_is_untouched_by_the_rule(self):
+        # The guard is equality with the template, so a genuine record can only
+        # trip it by coincidence -- and the two shipped Tier-1 records are the
+        # standing proof it does not.
+        papers, problems = check.read_records()
+        for paper_id in ("locusmasterte", "mates"):
+            assert paper_id in papers
+            assert paper_id not in problems
+
+
+class TestSeveralRepositories:
+    def test_a_list_of_repositories_is_all_expected(self):
+        # ALIGNN points at alignn and jarvis, ASPEN at the package and the
+        # manuscript. Keeping only the first understates what a reproducer has
+        # to obtain, and understates it invisibly: recall would still read 100%.
+        _accessions, repos, skipped = check.expected_resources(
+            {
+                "github": [
+                    "https://github.com/usnistgov/alignn",
+                    "https://github.com/usnistgov/jarvis",
+                ]
+            }
+        )
+        assert len(repos) == 2
+        assert skipped == []
+
+    def test_a_single_repository_still_works(self):
+        _accessions, repos, _skipped = check.expected_resources(
+            {"github": "https://github.com/mcgilldinglab/MATES"}
+        )
+        assert len(repos) == 1
+
+    def test_a_placeholder_among_real_ones_is_skipped_not_expected(self):
+        _accessions, repos, skipped = check.expected_resources(
+            {"github": ["https://github.com/a/b", "exact repo URL not confirmed"]}
+        )
+        assert len(repos) == 1
+        assert len(skipped) == 1
