@@ -23,6 +23,35 @@ uv run python audit.py data/papers/mates.pdf --out output/
 #    output/mates/figures/
 ```
 
+```bash
+uv run streamlit run ui.py          # the same audit, read by a person
+```
+
+## The viewer
+
+`ui.py` is a reader over what `audit.py` already wrote to `output/<paper>/`. It
+extracts nothing itself, which keeps one rule easy to hold: there is exactly
+one place a finding can be produced, and the viewer is not it. Every number on
+the page came out of a JSON file on disk.
+
+What it exists to get right is the **band**. A single number would read as
+precision the evidence does not support and would hide the distinction the
+whole tool is built on, so the headline draws the floor solid and the gap to
+the ceiling hatched — the gap is not partial credit, it is the range this
+reader could not narrow — and *not assessed* is drawn as its own state rather
+than as a zero.
+
+It is tested by running it. `tests/test_ui.py` drives the page through
+Streamlit's `AppTest` once per audited paper, because the first version
+returned HTTP 200 in a browser while raising `TypeError: unhashable type:
+'slice'` on every paper: it read `by_role` as a list of findings when it is a
+map of counts. A live server answering 200 would never have shown that.
+
+`.streamlit/config.toml` binds it to `localhost`. Streamlit's default listens
+on every interface and prints an "External URL" on the machine's public
+address, which would put a paper's audit — and any unpublished data named in it
+— on whatever network the laptop is attached to.
+
 ## Two commands, kept apart
 
 ```bash
