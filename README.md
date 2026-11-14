@@ -27,11 +27,25 @@ uv run python audit.py data/papers/mates.pdf --out output/
 uv run streamlit run ui.py          # the same audit, read by a person
 ```
 
-## The viewer
+## The product
 
-Paper in, score out, then two panels: **what is not available** and **what
-is**. Every row in either one carries the link *the paper itself gave* and the
-place in the paper that named it — page, section, and the sentence verbatim.
+```bash
+uv run streamlit run ui.py
+```
+
+One page. Drop a paper in the middle of it; the audit runs; the result comes
+out. There is no paper library and no sidebar: the five papers this project was
+developed against are a verification set, not furniture for the product.
+
+Nothing is kept. The upload and its audit live in a temporary directory for the
+length of the session and are deleted when another paper is dropped, so the
+page carries no state from the last visitor. The upload goes into an empty
+directory of its own and is passed to `audit.py` by path; nothing in it, or in
+any repository it points at, is ever executed.
+
+The result is the score band, then two panels — **what is not available** and
+**what is**. Every row in either carries the link *the paper itself gave* and
+the place in the paper that named it: page, section, and the sentence verbatim.
 
 Whose link it is matters, and is the one thing this panel has to get right. A
 GEO landing page looks identical whether the paper printed it or this tool
@@ -46,30 +60,22 @@ says which:
 - **a constructed lookup** — offered beside it, labelled "built from the
   identifier, not a link the paper gave".
 
-That middle case is why the accession links are read from the surrounding text
+That middle case is why accession links are read from the surrounding text
 rather than from the `url` findings: the accession pattern claims the span
 first, so none of MATES's five GEO URLs survives as a separate `url` finding.
 Comparing the accession list against the url list reports that no paper links
 anything — which is what I concluded the first time, and it was wrong.
 
-`ui.py` is otherwise a reader over what `audit.py` already wrote to
-`output/<paper>/`. It
-extracts nothing itself, which keeps one rule easy to hold: there is exactly
-one place a finding can be produced, and the viewer is not it. Every number on
-the page came out of a JSON file on disk.
+Archive lookups run, because a page whose job is to say what is *not available*
+cannot make that claim without asking the archive. Figure reading does not: it
+needs a vision backend that may not be running, and a missing backend should
+not fail an audit.
 
-What it exists to get right is the **band**. A single number would read as
-precision the evidence does not support and would hide the distinction the
-whole tool is built on, so the headline draws the floor solid and the gap to
-the ceiling hatched — the gap is not partial credit, it is the range this
-reader could not narrow — and *not assessed* is drawn as its own state rather
-than as a zero.
-
-It is tested by running it. `tests/test_ui.py` drives the page through
-Streamlit's `AppTest` once per audited paper, because the first version
-returned HTTP 200 in a browser while raising `TypeError: unhashable type:
-'slice'` on every paper: it read `by_role` as a list of findings when it is a
-map of counts. A live server answering 200 would never have shown that.
+The page extracts nothing itself — every number on it came out of a JSON file
+`audit.py` wrote. It is tested by being run: `tests/test_ui.py` drives both
+states through Streamlit's `AppTest`, because an early version returned HTTP
+200 in a browser while raising `TypeError: unhashable type: 'slice'` on every
+paper. A live server answering 200 would never have shown that.
 
 `.streamlit/config.toml` binds it to `localhost`. Streamlit's default listens
 on every interface and prints an "External URL" on the machine's public
