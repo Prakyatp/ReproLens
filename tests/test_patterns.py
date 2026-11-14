@@ -106,3 +106,49 @@ class TestLigatures:
     def test_expansion_does_not_disturb_the_plain_normalizer(self):
         for sample in ["quanti\ufb01cation", "a\ufb01b", "no ligature here", ""]:
             assert normalize_with_offsets(sample)[0] == normalize(sample)
+
+
+class TestTheLookupLink:
+    """A landing page built from an identifier, for a reader to click.
+
+    Never a claim that the page exists -- that is ``discovery/resolve.py``'s
+    question, and the two must not be conflated: a link resolving to "no such
+    accession" is the case a reproducer most needs to see, and it needs the
+    link in order to see it.
+    """
+
+    def test_each_archive_gets_its_own_host(self):
+        from reprolens.discovery.patterns import archive_url
+
+        assert archive_url("geo_series", "GSE212945") == (
+            "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE212945"
+        )
+        assert archive_url("ena_run", "ERR123456") == (
+            "https://www.ebi.ac.uk/ena/browser/view/ERR123456"
+        )
+        assert archive_url("bioproject", "PRJNA12345") == (
+            "https://www.ncbi.nlm.nih.gov/bioproject/PRJNA12345"
+        )
+
+    def test_a_controlled_access_study_links_to_where_you_apply(self):
+        from reprolens.discovery.patterns import archive_url
+
+        # dbGaP being controlled is the reason the link matters: it is where
+        # the application process starts.
+        assert "study_id=phs000424" in archive_url("dbgap", "phs000424")
+
+    def test_an_identifier_matched_in_two_forms_resolves_either_way(self):
+        from reprolens.discovery.patterns import archive_url
+
+        assert archive_url("zenodo", "10.5281/zenodo.1") == "https://doi.org/10.5281/zenodo.1"
+        assert archive_url("zenodo", "zenodo.org/record/1") == "https://zenodo.org/record/1"
+
+    def test_an_arxiv_id_drops_its_prefix(self):
+        from reprolens.discovery.patterns import archive_url
+
+        assert archive_url("arxiv", "arXiv:2209.05554") == "https://arxiv.org/abs/2209.05554"
+
+    def test_a_kind_with_no_landing_page_says_so(self):
+        from reprolens.discovery.patterns import archive_url
+
+        assert archive_url("geo_whatever", "X1") is None

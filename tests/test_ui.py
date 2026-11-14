@@ -23,9 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "ui.py"
 OUTPUT = ROOT / "output"
 
-AppTest = pytest.importorskip(
-    "streamlit.testing.v1", reason="streamlit is not installed"
-).AppTest
+AppTest = pytest.importorskip("streamlit.testing.v1", reason="streamlit is not installed").AppTest
 
 
 def audited() -> list[str]:
@@ -89,3 +87,91 @@ def test_with_no_output_at_all_it_says_so_rather_than_crashing():
     app.secrets["_"] = ""
     app.run()
     assert not app.exception
+
+
+class TestTheLinkThePaperGave:
+    """Whose link it is, which is the distinction this panel turns on.
+
+    A GEO landing page looks identical whether the paper printed it or this
+    tool built it from the accession, so the two can only be told apart by
+    saying which. One is the paper referencing a dataset; the other is this
+    tool guessing where that dataset would live if it existed.
+    """
+
+    def link(self, **finding):
+        import ui
+
+        return ui.paper_link(finding)
+
+    def test_a_repository_path_is_already_a_link(self):
+        # A typesetter drops the scheme; "github.com/owner/name" is a URL.
+        url, how = self.link(value="github.com/mcgilldinglab/MATES", kind="github")
+        assert url == "https://github.com/mcgilldinglab/MATES"
+        assert how == "printed in the text"
+
+    def test_a_doi_resolves_through_doi_org(self):
+        url, _how = self.link(value="10.5281/zenodo.13738122", kind="zenodo")
+        assert url == "https://doi.org/10.5281/zenodo.13738122"
+
+    def test_an_accessions_link_is_read_out_of_the_text_beside_it(self):
+        # Where it actually lives. MATES's Data availability statement writes
+        # "(GSE212945, https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=
+        # GSE212945)" for 5 of its 10 accessions, and NONE of those URLs
+        # survives as a separate `url` finding -- the accession pattern claims
+        # the span first. Comparing the accession list against the url list
+        # therefore reports that no paper links anything, which is exactly how
+        # this was missed the first time round.
+        url, how = self.link(
+            value="GSE212945",
+            kind="geo_series",
+            occurrences=[
+                {
+                    "page": 20,
+                    "context": "nanopore (GSE212945, https://www.ncbi.nlm.nih.gov/geo/"
+                    "query/acc.cgi?acc=GSE212945) as detailed in Shiau et al.",
+                }
+            ],
+        )
+        assert url == "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE212945"
+        assert "page 20" in how
+
+    def test_a_bare_accession_reports_no_link_rather_than_inventing_one(self):
+        # ASPEN, LocusMasterTE and half of MATES name an accession and give no
+        # URL. Saying so is the honest answer; a constructed lookup is offered
+        # separately and labelled as constructed.
+        url, how = self.link(
+            value="GSE164978",
+            kind="geo_series",
+            occurrences=[{"page": 19, "context": "downloaded from the GSE164978 dataset [32]"}],
+        )
+        assert url is None
+        assert how == ""
+
+    def test_the_closing_bracket_is_not_part_of_the_url(self):
+        url, _how = self.link(
+            value="GSE1",
+            kind="geo_series",
+            occurrences=[{"page": 1, "context": "(GSE1, https://x.org/acc?a=GSE1) and then"}],
+        )
+        assert url == "https://x.org/acc?a=GSE1"
+
+
+class TestTheTabCountsMatchTheirPanels:
+    def test_present_counts_everything_the_panel_lists(self):
+        # atomate2 pins no version and deposits no dataset, so an earlier
+        # version labelled its tab "Present (0)" above a panel listing six
+        # repositories.
+        import json
+
+        import ui
+
+        for paper in audited():
+            links = json.loads((OUTPUT / paper / "links.json").read_text())
+            checklist = json.loads((OUTPUT / paper / "checklist.json").read_text())
+            assessment = json.loads((OUTPUT / paper / "assessment.json").read_text())
+            count = ui._count_present(assessment, links, checklist)
+            repositories = [
+                f for f in links.get("findings", []) if f.get("kind") in ("github", "gitlab")
+            ]
+            if repositories:
+                assert count >= len(repositories), paper
