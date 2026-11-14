@@ -382,6 +382,19 @@ def _parameter_rows(report: dict) -> list[tuple[str, str, str, str]]:
             )
         )
 
+    for item in report.get("checklist", {}).get("settings", []):
+        # A value the paper states is the one row in this table that is already
+        # answered, and it is listed for exactly that reason: the table is what a
+        # reader has to gather, and these are the entries they do not have to.
+        rows.append(
+            (
+                "parameter",
+                f"`{item['name']}`",
+                f"`{item['value']}` stated in the paper",
+                _quote(item.get("evidence", ""), 90),
+            )
+        )
+
     execution = report.get("repository", {}).get("execution", {})
     # One row per file, not per command naming it. This table is a list of what
     # a reader has to gather, and MATES asks for Drosophila_TE.csv from two

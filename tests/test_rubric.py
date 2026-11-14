@@ -19,7 +19,7 @@ from reprolens.discovery.resolve import (
 )
 from reprolens.documents.base import PageText, is_readable
 from reprolens.documents.sections import SectionMark, classify_heading
-from reprolens.extraction.checklist import Checklist, Parameter, Software
+from reprolens.extraction.checklist import Checklist, Parameter, Setting, Software
 from reprolens.scoring.rubric import WEIGHTS, assess, link_mismatches
 
 # Enough body prose to clear ``MIN_DOCUMENT_CHARS``, because the rubric refuses
@@ -230,6 +230,37 @@ class TestSeverityFollowsTheBlueprint:
             software=[software("SeqKit", "tool", "pinned", "2.8.2")], parameters=[], commands=[]
         )
         assert assess([page("")], [], checklist).issues == []
+
+
+class TestAValueThePaperStatesItself:
+    def _with(self, *settings: Setting):
+        checklist = Checklist(software=[], parameters=[], commands=[], settings=list(settings))
+        return criterion(assess([page("")], [], checklist), "parameters_configuration")
+
+    def test_it_raises_the_floor_not_only_the_ceiling(self):
+        # The asymmetry is the whole criterion. A README command may be a worked
+        # example, so it raises the ceiling; a value the paper prints is the
+        # paper documenting the configuration behind its own results.
+        bare = self._with()
+        stated = self._with(Setting(name="Learning rate", value="0.001", evidence="x"))
+        assert stated.floor > bare.floor
+
+    def test_the_credit_is_capped(self):
+        # A paper can document its training configuration in full and still not
+        # say which reference genome it aligned against, so a complete
+        # hyperparameter table must not carry the criterion on its own.
+        many = self._with(*(Setting(name=f"p{n}", value=str(n), evidence="x") for n in range(9)))
+        three = self._with(*(Setting(name=f"p{n}", value=str(n), evidence="x") for n in range(3)))
+        assert many.floor == three.floor
+
+    def test_a_stated_value_closes_the_undetermined_gap(self):
+        # Naming no flags is not evidence either way, so the band stays open on
+        # the chance the configuration is documented somewhere unseen. A stated
+        # value settles that question: it is documented, and here it is.
+        bare = self._with()
+        stated = self._with(Setting(name="FDR", value="0.05", evidence="x"))
+        assert bare.ceiling > bare.floor
+        assert stated.ceiling == stated.floor
 
 
 class TestTheRepositoryChannel:
