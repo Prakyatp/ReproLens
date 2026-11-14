@@ -81,6 +81,85 @@ _QUOTED = re.compile(r"['‘’\"“”]([^'‘’\"“”]{6,160})")
 _PROGRAM = re.compile(r"^[a-z][\w.-]*\s")
 
 
+# --- named settings ------------------------------------------------------------
+# A parameter the paper states in prose or in a hyperparameter table, as opposed
+# to a command-line flag. Deliberately a CLOSED vocabulary, because the open
+# form does not work: a rule of "a name, a separator, a number" returns 188-401
+# matches per paper across the five, and the most frequent captures are DOIs
+# ("doi 10", 51 on ASPEN), author names, table cross-references ("Additional
+# file 13") and elapsed days. The signal is there but the ratio is unusable, so
+# this names what it is looking for -- the same decision, for the same reason,
+# as the software vocabulary above.
+_SETTING_NAMES: tuple[str, ...] = (
+    # training configuration, as ALIGNN's "Parameter Value" table spells it out
+    r"learning[-\s]rate",
+    r"batch size",
+    r"weight decay",
+    r"hidden features",
+    r"embedding features",
+    r"edge input features",
+    r"triplet input features",
+    r"atom input features",
+    r"ALIGNN layers",
+    r"GCN layers",
+    r"number of layers",
+    r"epochs",
+    r"dropout",
+    r"momentum",
+    r"patience",
+    r"n_estimators",
+    # "train-validation-test split" is deliberately NOT here. It matched twice
+    # on ALIGNN and one of the two came out as "110000-1000010829": the paper
+    # prints "110000-10000- 10829" across a line break, and the hyphen-join that
+    # repairs wrapped words removes the separator. Reporting a mangled number
+    # under a provenance quote is worse than reporting nothing, and a dataset
+    # split is not a configured parameter of the method anyway.
+    # statistical thresholds, which are the configuration of an analysis paper
+    r"FDR",
+    r"q-?value",
+    r"threshold",
+    # clustering and filtering
+    r"resolution",
+    r"min(?:imum)? cells",
+    r"min(?:imum)? genes",
+    r"window size",
+    r"bin size",
+    r"cutoff",
+)
+
+# The exponent form comes FIRST or it never matches: "10^-5" starts with a digit
+# run, so a leading "\d[\d.]*" alternative captures "10" and reports ALIGNN's
+# weight decay as four thousand times its real value. A hyphenated run is kept
+# whole for the same reason -- "110000-10000-10829" is one split specification,
+# and its first third is not a number the paper stated.
+_SETTING_VALUE = re.compile(
+    r"(\d[\d.]*\s*[×x]\s*10\^[-+]?\d+|10\^[-+]?\d+|"
+    r"\d[\d.]*(?:-\d[\d.]*)+|\d[\d.]*)"
+)
+
+# Every way the five papers join a name to its value, including a bare space:
+# the text layer flattens ALIGNN's two-column table to "Batch size 64 Learning
+# rate 0.001", so requiring punctuation would lose the one paper that documents
+# its configuration in full.
+_SETTING_SEP = r"\s*(?:=|:|\bof\b|\b(?:was\s+)?set\s+to\b|\bto\b|\bis\b|[<>≤≥]|\s)\s*"
+
+_SETTINGS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (name, re.compile(rf"\b{name}\b{_SETTING_SEP}{_SETTING_VALUE.pattern}", re.I))
+    for name in _SETTING_NAMES
+)
+
+# A percentage is a measured quantity, not a configured one. ASPEN writes "the
+# resolution of 20-38% of total sequencing reads", which is the single false
+# positive the closed vocabulary produced on all five papers; its real
+# "resolution = 0.9" (Seurat's FindClusters) is three pages later and unaffected.
+_A_PROPORTION = re.compile(r"\s*%")
+
+# The joining words, stripped back off the name the paper used. The separator is
+# matched as part of the name's span so the value's position is known, which
+# otherwise leaves the label reading "weight decay of".
+_SETTING_TAIL = re.compile(r"\s*(?:=|:|[<>≤≥]|\b(?:of|to|is|was set to|set to)\b)\s*$", re.I)
+
+
 def _flex(name: str) -> str:
     """Allow typesetting to split a name: "RepeatMasker" -> "Repeat Masker".
 
@@ -303,6 +382,22 @@ class Parameter:
 
 
 @dataclass(slots=True)
+class Setting:
+    """A parameter the paper itself states a value for.
+
+    Separate from ``Parameter`` on purpose. A ``Parameter`` is a command-line
+    flag, and the interesting thing about one is usually that its value is
+    *missing* -- MATES names ``--outFilterMultimapNmax`` and never says what it
+    was set to. A ``Setting`` always carries a value, and because the paper is
+    the one stating it, it raises the floor rather than the ceiling.
+    """
+
+    name: str
+    value: str
+    evidence: str
+
+
+@dataclass(slots=True)
 class Command:
     command: str
     evidence: str
@@ -313,6 +408,7 @@ class Checklist:
     software: list[Software]
     parameters: list[Parameter]
     commands: list[Command]
+    settings: list[Setting] = field(default_factory=list)
 
     def gaps(self) -> list[Software]:
         """Declared software the paper does not pin down."""
@@ -331,10 +427,12 @@ class Checklist:
                 ),
                 "flags_named": len(self.parameters),
                 "flags_with_a_value": len([p for p in self.parameters if p.value]),
+                "settings_stated": len(self.settings),
                 "commands_given": len(self.commands),
             },
             "software": [asdict(s) | {"declared": s.declared} for s in self.software],
             "parameters": [asdict(p) for p in self.parameters],
+            "settings": [asdict(s) for s in self.settings],
             "commands": [asdict(c) for c in self.commands],
         }
 
@@ -366,6 +464,7 @@ def build(pages: list[PageText]) -> Checklist:
     resolver = resolve(pages)
     found: dict[str, Software] = {}
     parameters: dict[str, Parameter] = {}
+    settings: dict[tuple[str, str], Setting] = {}
     commands: dict[str, Command] = {}
 
     for page in pages:
@@ -388,6 +487,24 @@ def build(pages: list[PageText]) -> Checklist:
                     flag=flag, value=_value_after(text, match.end()), evidence=_quote(text, match)
                 )
 
+        for name, pattern in _SETTINGS:
+            for match in pattern.finditer(text):
+                if _A_PROPORTION.match(text, match.end()):
+                    continue
+                value = match.group(1).strip().rstrip(".")
+                # Keyed on the pair, not the name: ASPEN states four different
+                # FDR thresholds and every one of them is a real configured
+                # value. Keyed on the name alone, the paper would appear to have
+                # documented one.
+                key = (name, value)
+                if key not in settings:
+                    label = " ".join(match.group(0)[: match.start(1) - match.start()].split())
+                    settings[key] = Setting(
+                        name=_SETTING_TAIL.sub("", label).strip() or name,
+                        value=value,
+                        evidence=_quote(text, match),
+                    )
+
         for match in _QUOTED.finditer(text):
             body = " ".join(match.group(1).split())
             # A command names a program and then its arguments. Requiring the
@@ -402,6 +519,7 @@ def build(pages: list[PageText]) -> Checklist:
     return Checklist(
         software=sorted(found.values(), key=lambda s: (s.kind, s.name.casefold())),
         parameters=sorted(parameters.values(), key=lambda p: p.flag),
+        settings=sorted(settings.values(), key=lambda s: (s.name.casefold(), s.value)),
         commands=sorted(commands.values(), key=lambda c: c.command),
     )
 

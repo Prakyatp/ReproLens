@@ -635,8 +635,34 @@ def _parameters(
                 f"text (e.g. {stated[0]})"
             )
 
+    if checklist.settings:
+        # The paper stating a value is the criterion's own question answered, so
+        # this is floor credit and not ceiling credit -- the asymmetry the
+        # repository branch below turns on. ALIGNN prints a "Parameter Value"
+        # table (ALIGNN layers 4, hidden features 256, learning rate 0.001,
+        # weight decay 10^-5) and ASPEN states four FDR thresholds; nothing in
+        # this criterion could see either before.
+        #
+        # Capped at 3 of 10, and the cap is load-bearing twice over. A paper can
+        # document its training configuration in full and still not say which
+        # reference genome it aligned against, so a complete hyperparameter
+        # table must not carry the criterion alone. And the vocabulary is closed
+        # and short: a paper that configures something this list cannot name
+        # scores no worse than one that configures nothing, which would be a
+        # wrong ordering if the credit were large.
+        credit = min(3, len(checklist.settings))
+        floor += credit
+        first = checklist.settings[0]
+        basis.append(
+            f"{len(checklist.settings)} parameter value(s) stated in the paper "
+            f"(e.g. {first.name} = {first.value})"
+        )
+
     weight = WEIGHTS["parameters_configuration"]
-    ceiling = floor + (4 if not checklist.parameters else 0)
+    # No flags named AND no values stated leaves the configuration genuinely
+    # undetermined rather than absent. Either one on its own means the paper
+    # does document configuration somewhere, so the gap closes.
+    ceiling = floor + (4 if not checklist.parameters and not checklist.settings else 0)
 
     if repo is not None:
         valued_flags = [f for f in repo.execution.flags if f.value]

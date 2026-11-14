@@ -244,9 +244,7 @@ class TestTheMaterialsScienceVocabulary:
         # rule that keeps "STAR" out of "STARsolo".
         checklist = build([page("DimeNet++ was trained for 300 epochs.")])
         assert [s.name for s in checklist.software] == ["DimeNet++"]
-        assert [s.name for s in build([page("DimeNet used radial bases.")]).software] == [
-            "DimeNet"
-        ]
+        assert [s.name for s in build([page("DimeNet used radial bases.")]).software] == ["DimeNet"]
 
     def test_the_names_that_collide_with_prose_were_left_out(self):
         # Each of these is real materials software and each was dropped after
@@ -271,3 +269,67 @@ class TestTheMaterialsScienceVocabulary:
         assert found.kind == "database"
         assert found.specificity == "named_only"
         assert found in checklist.gaps()
+
+
+class TestTheValuesAPaperStatesItself:
+    def test_a_flattened_hyperparameter_table_is_read(self):
+        # The text layer gives ALIGNN's two-column "Parameter Value" table as
+        # one run, so the separator between a name and its value is a bare
+        # space. Requiring punctuation would lose the one paper of the five that
+        # documents its training configuration in full.
+        text = (
+            "Parameter Value ALIGNN layers 4 GCN layers 4 Edge input features 80 "
+            "Triplet input features 40 Embedding features 64 Hidden features 256 "
+            "Normalization Batch normalization Batch size 64 Learning rate 0.001"
+        )
+        found = {(s.name, s.value) for s in build([page(text)]).settings}
+        assert ("ALIGNN layers", "4") in found
+        assert ("Hidden features", "256") in found
+        assert ("Batch size", "64") in found
+        assert ("Learning rate", "0.001") in found
+
+    def test_an_exponent_is_kept_whole(self):
+        # "10^-5" opens with a digit run, so a value pattern that tries a plain
+        # number first captures "10" and reports a weight decay four thousand
+        # times its real size. The exponent alternative has to come first.
+        text = "trained using the AdamW optimizer with normalized weight decay of 10^-5"
+        assert [(s.name, s.value) for s in build([page(text)]).settings] == [
+            ("weight decay", "10^-5")
+        ]
+
+    def test_every_threshold_is_its_own_value(self):
+        # ASPEN states four different FDR thresholds and each one configures a
+        # different analysis. Keyed on the name alone, the paper would look as
+        # though it had documented one.
+        text = "enriched at FDR < 0.1, imbalanced at FDR = 0.001, and dynamic at FDR < 0.05"
+        assert [s.value for s in build([page(text)]).settings if s.name == "FDR"] == [
+            "0.001",
+            "0.05",
+            "0.1",
+        ]
+
+    def test_a_percentage_is_measured_rather_than_configured(self):
+        # ASPEN writes "the resolution of 20-38% of total sequencing reads",
+        # which is an outcome. Its real "resolution = 0.9" is Seurat's
+        # FindClusters setting and is unaffected by the guard.
+        measured = "this strategy enabled the resolution of 20-38% of total reads"
+        assert build([page(measured)]).settings == []
+        configured = "implemented in the FindClusters function (resolution = 0.9)"
+        assert [s.value for s in build([page(configured)]).settings] == ["0.9"]
+
+    def test_a_name_is_reported_without_its_joining_word(self):
+        # The separator is matched inside the name's span so the value's
+        # position is known, which otherwise leaves the label "threshold of".
+        text = "a threshold of 0.45 was selected to assign the group"
+        assert [s.name for s in build([page(text)]).settings] == ["threshold"]
+
+    def test_the_open_form_is_not_used(self):
+        # A rule of "a name, a separator, a number" returns 188-401 matches per
+        # paper across the five, and the most frequent captures are DOIs,
+        # author names and table cross-references. The vocabulary is closed, so
+        # none of these is a stated parameter.
+        text = (
+            "Wang Ruohan, Zheng Yumin. Nature 2024 doi 10.1038/s41467. "
+            "Additional file 13 and Supplementary Table 6 report CD8 T-cells day 7."
+        )
+        assert build([page(text)]).settings == []

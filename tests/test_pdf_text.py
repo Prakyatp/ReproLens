@@ -123,18 +123,21 @@ class TestTheThreeEncodings:
         # MATES p4: "P < 1 x 10" then raised "−" then raised "6". The second
         # span is attached to a sign rather than to a number, which is what
         # dropped it.
-        assert rendered(
-            span("P < 1 × 10"),
-            span("−", superscript=True),
-            span("6", superscript=True),
-        ) == "P < 1 × 10^-6"
+        assert (
+            rendered(
+                span("P < 1 × 10"),
+                span("−", superscript=True),
+                span("6", superscript=True),
+            )
+            == "P < 1 × 10^-6"
+        )
 
     def test_sign_as_an_ordinary_glyph_and_digits_raised(self):
         # ASPEN p2 sets the minus as a ⁻ glyph in an unraised span and raises
         # only "16". The sign is normalised rather than left beside the caret.
-        assert rendered(
-            span("p < 2.22 × 10 ⁻"), span("16", superscript=True)
-        ) == "p < 2.22 × 10^-16"
+        assert (
+            rendered(span("p < 2.22 × 10 ⁻"), span("16", superscript=True)) == "p < 2.22 × 10^-16"
+        )
 
     def test_a_citation_marker_after_a_sign_is_still_a_marker(self):
         # The sign-stripping must not turn a hyphenated name into a number.
@@ -149,9 +152,12 @@ class TestTheThreeEncodings:
     def test_a_split_citation_range_is_still_dropped(self):
         # MATES writes "heterogeneity" + raised "1" + raised "–" + raised "3"
         # for references 1 to 3. Nothing here is attached to a number.
-        assert rendered(
-            span("heterogeneity"),
-            span("1", superscript=True),
-            span("–", superscript=True),
-            span("3", superscript=True),
-        ) == "heterogeneity"
+        assert (
+            rendered(
+                span("heterogeneity"),
+                span("1", superscript=True),
+                span("–", superscript=True),
+                span("3", superscript=True),
+            )
+            == "heterogeneity"
+        )
