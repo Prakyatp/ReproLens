@@ -178,3 +178,55 @@ def clean_value(raw: str, pattern: Pattern) -> str:
     if pattern.uppercase:
         value = value.upper()
     return value
+
+
+# Where a person goes to look an identifier up. One canonical landing page per
+# kind, so a report can hand a reader a link instead of an accession they have
+# to paste into a search box themselves.
+#
+# Deliberately a formatted string rather than anything fetched: this is not a
+# claim that the page exists. Whether a dataset is actually there is a separate
+# question that ``discovery/resolve.py`` answers by asking the archive, and the
+# two must not be conflated -- a link that resolves to "no such accession" is
+# exactly the case a reproducer most needs to see, and it needs the link to see
+# it.
+_ARCHIVE_URL: dict[str, str] = {
+    "geo_series": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={value}",
+    "geo_sample": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={value}",
+    "geo_platform": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={value}",
+    "sra_run": "https://www.ncbi.nlm.nih.gov/sra/{value}",
+    "sra_experiment": "https://www.ncbi.nlm.nih.gov/sra/{value}",
+    "sra_study": "https://www.ncbi.nlm.nih.gov/sra/{value}",
+    "bioproject": "https://www.ncbi.nlm.nih.gov/bioproject/{value}",
+    "biosample": "https://www.ncbi.nlm.nih.gov/biosample/{value}",
+    "ena_run": "https://www.ebi.ac.uk/ena/browser/view/{value}",
+    "ena_study": "https://www.ebi.ac.uk/ena/browser/view/{value}",
+    # dbGaP is controlled access by design, so the landing page is the whole
+    # point: it is where the application process starts.
+    "dbgap": "https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id={value}",
+    "pubmed": "https://{value}",
+    "pmc": "https://{value}",
+    "doi": "https://doi.org/{value}",
+    "arxiv": "https://arxiv.org/abs/{value}",
+    "github": "https://{value}",
+    "gitlab": "https://{value}",
+    "figshare": "https://{value}",
+    "url": "{value}",
+}
+
+
+def archive_url(kind: str, value: str) -> str | None:
+    """The page where a reader can look this identifier up, if there is one."""
+    clean = value.strip()
+    if clean.startswith(("http://", "https://")):
+        return clean
+    if kind == "arxiv":
+        clean = clean.removeprefix("arXiv:").strip()
+    # Zenodo and Dryad are each matched in two forms -- a bare DOI and a URL --
+    # so the form decides the host rather than one template serving both.
+    if kind in ("zenodo", "dryad"):
+        return f"https://doi.org/{clean}" if clean.startswith("10.") else f"https://{clean}"
+    template = _ARCHIVE_URL.get(kind)
+    if not template:
+        return None
+    return template.format(value=clean)

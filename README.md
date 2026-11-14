@@ -29,7 +29,31 @@ uv run streamlit run ui.py          # the same audit, read by a person
 
 ## The viewer
 
-`ui.py` is a reader over what `audit.py` already wrote to `output/<paper>/`. It
+Paper in, score out, then two panels: **what is not available** and **what
+is**. Every row in either one carries the link *the paper itself gave* and the
+place in the paper that named it — page, section, and the sentence verbatim.
+
+Whose link it is matters, and is the one thing this panel has to get right. A
+GEO landing page looks identical whether the paper printed it or this tool
+built it from the accession, so the two are only distinguishable if the page
+says which:
+
+- **the paper's own link** — read out of the text beside the identifier. MATES's
+  Data availability statement writes `(GSE212945, https://www.ncbi.nlm.nih.gov/
+  geo/query/acc.cgi?acc=GSE212945)` for 5 of its 10 accessions.
+- **no link** — stated plainly. ASPEN, LocusMasterTE and the other half of MATES
+  name an accession and leave the reader to find it.
+- **a constructed lookup** — offered beside it, labelled "built from the
+  identifier, not a link the paper gave".
+
+That middle case is why the accession links are read from the surrounding text
+rather than from the `url` findings: the accession pattern claims the span
+first, so none of MATES's five GEO URLs survives as a separate `url` finding.
+Comparing the accession list against the url list reports that no paper links
+anything — which is what I concluded the first time, and it was wrong.
+
+`ui.py` is otherwise a reader over what `audit.py` already wrote to
+`output/<paper>/`. It
 extracts nothing itself, which keeps one rule easy to hold: there is exactly
 one place a finding can be produced, and the viewer is not it. Every number on
 the page came out of a JSON file on disk.

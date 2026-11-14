@@ -20,11 +20,14 @@ its own state rather than as a zero.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import streamlit as st
+
+from reprolens.discovery.patterns import archive_url
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "output"
@@ -90,6 +93,150 @@ def band(floor: int, ceiling: int, total: int, *, height: int = 26) -> str:
     </div>"""
 
 
+# Identifier kinds whose value already *is* the link the paper printed. A
+# "github.com/owner/name" finding is a URL with the scheme left off by the
+# typesetter, not a bare name that needs looking up.
+_IS_A_LINK = {"url", "github", "gitlab", "figshare", "zenodo", "dryad", "doi", "pubmed", "pmc"}
+
+
+def paper_link(finding: dict) -> tuple[str | None, str]:
+    """The link the paper itself gave for this item, and how it gave it.
+
+    ``(None, "")`` when the paper gave none, which is the common case and has
+    to stay distinguishable from a link this tool built. Measured across the
+    five papers: not one of them prints a URL for any of its accessions. They
+    name "GSE164978" and leave the reader to find it. So the archive lookup
+    offered beside this is always labelled as constructed, because presenting
+    it as the paper's citation would be reporting something the paper did not
+    say -- in a tool whose entire job is telling those two apart.
+    """
+    value = str(finding.get("value", "")).strip()
+    kind = finding.get("kind", "")
+    if not value:
+        return None, ""
+
+    from_annotation = any(o.get("source") == "annotation" for o in finding.get("occurrences", []))
+    how = "an embedded hyperlink" if from_annotation else "printed in the text"
+
+    if value.startswith(("http://", "https://")):
+        return value, how
+    if kind in _IS_A_LINK and "/" in value and not value.startswith("10."):
+        return f"https://{value}", how
+    if kind in _IS_A_LINK and value.startswith("10."):
+        return f"https://doi.org/{value}", how
+
+    # An accession's own link, read out of the text around it. This is where it
+    # actually lives: MATES's Data availability statement writes "(GSE212945,
+    # https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE212945)" for 5 of
+    # its 10 accessions, and none of those URLs survives as a separate `url`
+    # finding -- the accession pattern claims the span first. Comparing the
+    # accession list against the url list therefore says no paper links
+    # anything, which is how this was missed the first time.
+    for occurrence in finding.get("occurrences", []):
+        found = re.search(
+            r"https?://[^\s)\]>,]*" + re.escape(value) + r"[^\s)\]>,]*",
+            occurrence.get("context", ""),
+            re.I,
+        )
+        if found:
+            return found.group(
+                0
+            ), f"printed beside the identifier on page {occurrence.get('page', '?')}"
+    return None, ""
+
+
+def mentions(finding: dict, limit: int = 3) -> list[dict]:
+    """Where the paper names this, worst-provenance-first filtered out.
+
+    Running headers are dropped: a DOI printed in the footer of all 22 pages is
+    not the paper referencing it, and showing that as the mention would bury
+    the one occurrence in the Data availability statement that matters.
+    """
+    occurrences = [
+        o for o in finding.get("occurrences", []) if o.get("source") != "furniture"
+    ] or finding.get("occurrences", [])
+    ranked = sorted(
+        occurrences,
+        key=lambda o: (o.get("section") in ("references", "page_furniture", "front_matter"),),
+    )
+    return ranked[:limit]
+
+
+def _where(occurrence: dict) -> str:
+    section = occurrence.get("section_heading") or occurrence.get("section", "")
+    return f"page {occurrence.get('page', '?')}" + (f", {section}" if section else "")
+
+
+def _item(
+    title: str,
+    note: str,
+    finding: dict | None,
+    *,
+    lookup: str | None = None,
+    quote: str = "",
+) -> None:
+    """One row of the two panels: what it is, the link, and where it was said."""
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        if note:
+            st.caption(note)
+
+        if finding is not None:
+            url, how = paper_link(finding)
+            if url:
+                st.markdown(f"🔗 [{url}]({url}) — {how}")
+            else:
+                st.markdown("🔗 **the paper gives no link for this**, only the identifier.")
+            if lookup:
+                # Clickable, but never presented as the paper's own citation.
+                # The label carries the distinction, because the link itself
+                # cannot: a GEO landing page looks identical whether the paper
+                # linked it or this tool built it from the accession.
+                st.markdown(
+                    f"🔎 [look it up]({lookup}) — built from the identifier, "
+                    f"not a link the paper gave"
+                )
+
+            for occurrence in mentions(finding):
+                st.markdown(
+                    f"<div style='font-size:0.84rem;color:#444'>"
+                    f"<b>{_where(occurrence)}</b> — “{occurrence.get('context', '')[:300]}”"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        elif quote:
+            st.markdown(
+                f"<div style='font-size:0.84rem;color:#444'>“{quote[:400]}”</div>",
+                unsafe_allow_html=True,
+            )
+
+
+def _run(source: str) -> None:
+    """Run the audit on one document, surfacing its own failure verbatim.
+
+    Resolution is left ON. With lookups disabled every dataset comes back
+    "unchecked", and this page's whole job is to say what is *not available* --
+    a claim that cannot be made without asking the archive. Figure reading is
+    left off, because it needs a vision backend that may not be running, and a
+    missing backend should not fail an audit.
+    """
+    with st.spinner(f"auditing {source} \u2026 this takes a minute"):
+        done = subprocess.run(  # noqa: S603 -- fixed argv, path chosen from disk
+            [sys.executable, str(ROOT / "audit.py"), source, "--out", str(OUTPUT), "--no-vlm"],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+    if done.returncode == 0:
+        st.success("done")
+        st.rerun()
+    else:
+        # In full rather than summarised: a failed audit is the one case where
+        # the tool's own output is the finding.
+        st.error("the audit failed")
+        st.code((done.stderr or done.stdout)[-3000:])
+
+
 def main() -> None:
     st.set_page_config(page_title="ReproLens", page_icon="🔬", layout="wide")
 
@@ -104,6 +251,19 @@ def main() -> None:
 
         st.divider()
         st.subheader("Audit a paper")
+
+        uploaded = st.file_uploader("Upload a paper", type=["pdf", "xml"])
+        if uploaded is not None:
+            # Saved under data/ rather than a temp directory, so the audit stays
+            # reproducible from the repo: a report whose source document has
+            # been deleted cannot be re-checked.
+            folder = "xml" if uploaded.name.lower().endswith(".xml") else "papers"
+            target = ROOT / "data" / folder / uploaded.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(uploaded.getbuffer())
+            if st.button(f"Audit {uploaded.name}", type="primary", width="stretch"):
+                _run(str(target.relative_to(ROOT)))
+
         # Only the two directories papers live in. A recursive sweep of data/
         # also offered jarvis's VASP test fixtures and MATES's vendored figure
         # PDF -- eighteen entries, three of them papers.
@@ -113,25 +273,15 @@ def main() -> None:
             for path in (ROOT / "data" / directory).glob(suffix)
         )
         if sources:
-            source = st.selectbox("Source document", sources)
+            st.caption("or audit one already in `data/`")
+            source = st.selectbox("Source document", sources, label_visibility="collapsed")
             if st.button("Run audit", width="stretch"):
-                with st.spinner(f"auditing {source} …"):
-                    done = subprocess.run(  # noqa: S603 -- a fixed command, chosen path
-                        [sys.executable, str(ROOT / "audit.py"), source, "--out", str(OUTPUT)],
-                        capture_output=True,
-                        text=True,
-                        cwd=ROOT,
-                    )
-                if done.returncode == 0:
-                    st.success("done")
-                    st.rerun()
-                else:
-                    # Surfaced in full rather than summarised: a failed audit is
-                    # the one case where the tool's own output is the finding.
-                    st.error("the audit failed")
-                    st.code((done.stderr or done.stdout)[-3000:])
-        else:
-            st.caption("No documents under `data/`.")
+                _run(source)
+
+        st.caption(
+            "Archive lookups are on, so a dataset can be reported as missing "
+            "rather than merely unchecked."
+        )
 
     if not paper:
         st.info("Audit a paper from the sidebar to begin.")
@@ -158,17 +308,22 @@ def main() -> None:
     _headline(assessment)
     st.divider()
 
-    overview, criteria, issues, resources, graph, provenance = st.tabs(
-        ["Overview", "Criteria", "What is missing", "Resources", "Dependencies", "Report"]
+    checklist = load(paper, "checklist") or {}
+    missing, present, criteria, graph, provenance = st.tabs(
+        [
+            f"⚠ Not available ({_count_missing(assessment, links)})",
+            f"✓ Present ({_count_present(assessment, links, checklist)})",
+            "Score detail",
+            "Dependencies",
+            "Full report",
+        ]
     )
-    with overview:
-        _overview(assessment, links)
+    with missing:
+        _missing(assessment, links)
+    with present:
+        _present(links, checklist)
     with criteria:
         _criteria(assessment)
-    with issues:
-        _issues(assessment)
-    with resources:
-        _resources(load(paper, "checklist") or {}, links)
     with graph:
         _graph(load(paper, "graph") or {})
     with provenance:
@@ -205,58 +360,149 @@ def _headline(assessment: dict) -> None:
                 )
 
 
-def _overview(assessment: dict, links: dict) -> None:
-    st.subheader("The five questions")
-    st.caption("Blueprint §42. Every answer below is a count of things on disk.")
+def _by_value(links: dict) -> dict[str, dict]:
+    return {str(f.get("value", "")): f for f in links.get("findings", [])}
 
-    findings = links.get("findings", [])
-    checklist = links.get("checklist", {}).get("summary", {})
-    repository = links.get("repository", {})
 
-    rows = [
-        (
-            "What is required?",
-            f"{checklist.get('declared', 0)} software resource(s) the paper declares, "
-            f"plus every dataset and input file its repositories name",
-        ),
-        (
-            "What was found?",
-            f"{len(findings)} identifier(s) in the document; "
-            f"{len(repository.get('checkouts', []))} repository/ies read",
-        ),
-        (
-            "What is missing?",
-            f"{sum(assessment.get('severity', {}).values())} issue(s): "
-            + ", ".join(
-                f"{assessment.get('severity', {}).get(k, 0)} {SEVERITY_LABEL[k]}"
-                for k in SEVERITY_ORDER
-            ),
-        ),
-        (
-            "Where was each item mentioned?",
-            "every finding carries a page, a section and a quote — see Resources and Report",
-        ),
-        (
-            "What to investigate first?",
-            "the hard blockers, then the major issues — see *What is missing*",
-        ),
-    ]
-    for question, answer in rows:
-        st.markdown(f"**{question}**  \n{answer}")
+def _dataset_entries(links: dict) -> list[dict]:
+    return links.get("datasets_resolved", {}).get("entries", [])
 
-    unassessed = [c for c in assessment["criteria"] if not c.get("assessed", True)]
-    if unassessed:
-        st.divider()
-        st.subheader("Not assessed")
-        st.caption(
-            "These are not zeros. Nothing was measured, so nothing is claimed — "
-            "reported rather than scored."
+
+def _count_missing(assessment: dict, links: dict) -> int:
+    absent = [e for e in _dataset_entries(links) if e.get("status") in ("not_found", "restricted")]
+    return len(absent) + len(assessment.get("issues", []))
+
+
+# Every kind of thing the Present panel renders. The number on the tab has to be
+# the number of things in it: atomate2 pins no version and deposits no dataset,
+# so an earlier version labelled its tab "Present (0)" above a panel listing six
+# repositories.
+_PRESENT_LINK_KINDS = ("github", "gitlab", "zenodo", "figshare", "dryad")
+
+
+def _count_present(assessment: dict, links: dict, checklist: dict) -> int:
+    public = [e for e in _dataset_entries(links) if e.get("status") == "public"]
+    linked = [f for f in links.get("findings", []) if f.get("kind") in _PRESENT_LINK_KINDS]
+    pinned = [s for s in checklist.get("software", []) if s.get("declared") and s.get("version")]
+    return len(public) + len(linked) + len(pinned) + len(checklist.get("settings", []))
+
+
+def _missing(assessment: dict, links: dict) -> None:
+    st.caption(
+        "Everything a reproduction needs that this paper does not supply — each with "
+        "the link the paper gave, where it gave one, and the place in the paper that "
+        "named it."
+    )
+
+    findings = _by_value(links)
+    resolution = links.get("datasets_resolved", {})
+    entries = _dataset_entries(links)
+
+    if not resolution.get("attempted", False):
+        # The distinction the whole tool turns on: nothing was asked, so nothing
+        # is known. An "unchecked" dataset is not an available one.
+        st.warning(
+            "**Datasets were not looked up on this run**, so nothing below says whether "
+            "a dataset actually exists. " + " ".join(resolution.get("notes", []))
         )
-        for criterion in unassessed:
-            st.markdown(
-                f"- **{CRITERION_LABEL.get(criterion['name'], criterion['name'])}** — "
-                f"{criterion.get('reason', 'not assessed')}"
+
+    absent = [e for e in entries if e.get("status") in ("not_found", "restricted")]
+    if absent:
+        st.subheader(f"Datasets that are not there ({len(absent)})")
+        for entry in absent:
+            accession = entry["accession"]
+            status = {
+                "not_found": "the archive has no such record",
+                "restricted": "controlled access — an application is required",
+            }.get(entry["status"], entry["status"])
+            _item(
+                f"{accession} — {status}",
+                entry.get("detail", ""),
+                findings.get(accession),
+                lookup=archive_url(entry.get("kind", ""), accession),
             )
+
+    issues = assessment.get("issues", [])
+    for key in SEVERITY_ORDER:
+        of_kind = [i for i in issues if i["severity"] == key]
+        if not of_kind:
+            continue
+        st.subheader(f"{len(of_kind)} {SEVERITY_LABEL[key]}{'s' if len(of_kind) > 1 else ''}")
+        for issue in of_kind:
+            resource = str(issue.get("resource", ""))
+            _item(
+                f"{resource} — {issue.get('kind', '')}",
+                "",
+                findings.get(resource),
+                quote=issue.get("evidence", ""),
+            )
+
+    if not absent and not issues:
+        st.success(
+            "Nothing was flagged. That is a finding about the paper, not a default — "
+            "see *Score detail* for what was checked."
+        )
+
+
+def _present(links: dict, checklist: dict) -> None:
+    st.caption("What the paper does supply, with the link it gave and where it said so.")
+    findings = _by_value(links)
+
+    public = [e for e in _dataset_entries(links) if e.get("status") == "public"]
+    if public:
+        st.subheader(f"Datasets confirmed in the archive ({len(public)})")
+        for entry in public:
+            accession = entry["accession"]
+            _item(
+                f"{accession} — {entry.get('title') or 'public'}",
+                entry.get("detail", ""),
+                findings.get(accession),
+                lookup=archive_url(entry.get("kind", ""), accession),
+            )
+
+    repositories = [f for f in links.get("findings", []) if f.get("kind") in ("github", "gitlab")]
+    if repositories:
+        st.subheader(f"Code repositories the paper points at ({len(repositories)})")
+        for finding in repositories:
+            _item(str(finding["value"]), "", finding)
+
+    archives = [
+        f for f in links.get("findings", []) if f.get("kind") in ("zenodo", "figshare", "dryad")
+    ]
+    if archives:
+        st.subheader(f"Archived data and artifacts ({len(archives)})")
+        for finding in archives:
+            _item(str(finding["value"]), "", finding)
+
+    pinned = [s for s in checklist.get("software", []) if s.get("declared") and s.get("version")]
+    if pinned:
+        st.subheader(f"Software pinned to a version ({len(pinned)})")
+        st.dataframe(
+            [
+                {
+                    "name": s["name"],
+                    "version": s["version"],
+                    "kind": s["kind"],
+                    "where": ", ".join(s.get("sections", [])),
+                    "evidence": s.get("evidence", ""),
+                }
+                for s in pinned
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    settings = checklist.get("settings", [])
+    if settings:
+        st.subheader(f"Parameter values the paper states ({len(settings)})")
+        st.dataframe(
+            [
+                {"parameter": s["name"], "value": s["value"], "evidence": s["evidence"]}
+                for s in settings
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _criteria(assessment: dict) -> None:
@@ -288,103 +534,6 @@ def _criteria(assessment: dict) -> None:
                 unsafe_allow_html=True,
             )
         st.divider()
-
-
-def _issues(assessment: dict) -> None:
-    found = assessment.get("issues", [])
-    if not found:
-        st.success("No issues raised. That is a finding about the paper, not a default.")
-        return
-
-    st.caption("Blueprint §22, worst first. Each line carries the evidence it came from.")
-    for key in SEVERITY_ORDER:
-        of_kind = [i for i in found if i["severity"] == key]
-        if not of_kind:
-            continue
-        st.markdown(f"#### {len(of_kind)} {SEVERITY_LABEL[key]}{'s' if len(of_kind) > 1 else ''}")
-        for issue in of_kind:
-            with st.expander(f"**{issue['resource']}** — {issue['kind']}"):
-                st.markdown(f"> {issue.get('evidence') or '*no quote recorded*'}")
-
-
-def _resources(checklist: dict, links: dict) -> None:
-    summary = checklist.get("summary", {})
-    if summary:
-        columns = st.columns(4)
-        for column, (label, value) in zip(
-            columns,
-            [
-                ("declared", summary.get("declared", 0)),
-                ("pinned to a version", summary.get("pinned", 0)),
-                ("named only", summary.get("named_only", 0)),
-                ("values stated", summary.get("settings_stated", 0)),
-            ],
-            strict=True,
-        ):
-            column.metric(label, value)
-
-    software = [s for s in checklist.get("software", []) if s.get("declared")]
-    if software:
-        st.subheader("Software the paper declares")
-        st.caption("A version is what makes a tool identifiable. Named only ≠ pinned.")
-        st.dataframe(
-            [
-                {
-                    "name": s["name"],
-                    "kind": s["kind"],
-                    "specificity": s["specificity"],
-                    "version": s.get("version") or "—",
-                    "sections": ", ".join(s.get("sections", [])),
-                    "evidence": s.get("evidence", ""),
-                }
-                for s in software
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-
-    settings = checklist.get("settings", [])
-    if settings:
-        st.subheader("Values the paper states")
-        st.caption(
-            "A value the paper prints raises the floor. A value only a repository "
-            "command carries raises the ceiling — it may be a worked example."
-        )
-        st.dataframe(
-            [
-                {"parameter": s["name"], "value": s["value"], "evidence": s["evidence"]}
-                for s in settings
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-
-    findings = links.get("findings", [])
-    if findings:
-        st.subheader("Identifiers, by the role the app assigned")
-        st.caption(
-            "The role is the point: a GSE in a Data availability statement is this "
-            "paper's data, and the same GSE in a reference list is a dataset it "
-            "merely cites. `stated` means the document said so; `inferred` means "
-            "this reader decided, and says why."
-        )
-        st.dataframe(
-            [
-                {
-                    "identifier": f["value"],
-                    "kind": f["kind"],
-                    "role": f.get("role", "—"),
-                    "how": f.get("role_confidence", "—"),
-                    "why": f.get("role_reason", ""),
-                    "pages": ", ".join(str(n) for n in f.get("pages", [])[:12]),
-                    "sections": ", ".join(f.get("sections", [])),
-                    "occurrences": f.get("n_occurrences", 0),
-                }
-                for f in sorted(findings, key=lambda f: (f.get("role", ""), f["kind"]))
-            ],
-            width="stretch",
-            hide_index=True,
-        )
 
 
 def _graph(graph: dict) -> None:
