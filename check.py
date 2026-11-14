@@ -23,6 +23,7 @@ from reprolens.extraction.checklist import find_names
 from reprolens.scoring.rubric import WEIGHTS
 
 BENCHMARK = Path("benchmark/papers")
+TEMPLATE = Path("benchmark/tier2-template.json")
 
 # A placeholder left in a ground-truth record, e.g. mates.json's github field.
 _UNRESOLVED = re.compile(r"not confirmed|TODO", re.I)
@@ -75,7 +76,60 @@ def validate_record(paper_id: str, record: dict) -> list[str]:
     if tier not in (1, 2):
         problems.append(f"annotation_provenance.tier is {tier!r}; expected 1 or 2")
 
-    return problems + _validate_blockers(record) + _validate_rubric(record)
+    return (
+        problems
+        + _validate_template_leftovers(record)
+        + _validate_blockers(record)
+        + _validate_rubric(record)
+    )
+
+
+def _validate_template_leftovers(record: dict) -> list[str]:
+    """Fields still carrying the template's own placeholder text.
+
+    ``scripts/prep_benchmark.py`` writes a blank skeleton per paper, and a blank
+    skeleton validated clean: every structural rule above is satisfied by
+    placeholder prose, a rubric of seven zeros that correctly totals zero, and
+    one template blocker that the summary correctly counts. So a paper whose
+    annotation had not been started would have been graded against as though it
+    had, and the comparison would have looked entirely normal -- the precise
+    failure the rest of this validator exists to prevent, arriving through the
+    tooling meant to make annotating faster.
+
+    Compared against the template rather than a copied list of phrases, so the
+    two cannot drift: editing the template cannot leave a stale rule behind.
+    """
+    if not TEMPLATE.is_file():  # pragma: no cover -- the template is in the repo
+        return []
+    template = json.loads(TEMPLATE.read_text())
+    problems: list[str] = []
+
+    for field in ("title", "citation", "github", "data_accessions"):
+        if field in record and record[field] == template.get(field):
+            problems.append(
+                f"{field} is still the template's placeholder text; "
+                f"fill it in from benchmark/worksheets/{record.get('paper_id', '<id>')}.md"
+            )
+
+    blockers = record.get("blockers")
+    if blockers and blockers == template.get("blockers"):
+        problems.append(
+            "blockers is still the template's example blocker, so every severity "
+            "comparison for this paper would be against placeholder prose"
+        )
+
+    rubric = record.get("scoring_rubric_v0.1", {})
+    if rubric and rubric == template.get("scoring_rubric_v0.1"):
+        problems.append(
+            "scoring_rubric_v0.1 is still the template's seven zeros; a record scored "
+            "0 is indistinguishable from a record nobody has scored yet"
+        )
+
+    provenance = record.get("annotation_provenance", {})
+    if provenance.get("annotators") == template.get("annotation_provenance", {}).get("annotators"):
+        problems.append("annotation_provenance.annotators is still ['Your Name']")
+
+    return problems
 
 
 def _validate_blockers(record: dict) -> list[str]:
@@ -181,11 +235,17 @@ def expected_resources(record: dict) -> tuple[set[str], set[str], list[str]]:
 
     repos: set[str] = set()
     skipped: list[str] = []
-    github = record.get("github", "")
-    if github and not _UNRESOLVED.search(github):
-        repos.add(normalize_repo(github))
-    elif github:
-        skipped.append("github (ground truth is an unresolved placeholder)")
+    # One string or a list of them. ALIGNN points at two repositories (alignn
+    # and jarvis) and ASPEN at two (the package and the manuscript), and a
+    # record that could hold only the first would understate what a reproducer
+    # has to obtain -- and silently, since recall would still read 100%.
+    declared = record.get("github", "")
+    for github in declared if isinstance(declared, list) else [declared]:
+        github = str(github)
+        if github and not _UNRESOLVED.search(github):
+            repos.add(normalize_repo(github))
+        elif github:
+            skipped.append("github (ground truth is an unresolved placeholder)")
 
     return accessions, repos, skipped
 
@@ -412,7 +472,17 @@ def main() -> int:
     if args.validate_only:
         return 1 if problems else 0
 
-    results = [r for pid in papers if (r := grade(pid, args.out))]
+    # A record that failed validation is not graded. Every number below is a
+    # comparison against ground truth, so comparing against a record known to
+    # be wrong produces a confident, normal-looking, meaningless result -- and
+    # a blank skeleton from scripts/prep_benchmark.py is exactly that record.
+    gradable = [pid for pid in papers if pid not in problems]
+    if problems:
+        print(
+            f"not graded: {', '.join(sorted(problems))} -- "
+            f"the problems above have to be fixed first.\n"
+        )
+    results = [r for pid in gradable if (r := grade(pid, args.out))]
 
     if not results:
         print("No app output to grade. Run audit.py first.")

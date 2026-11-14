@@ -1,0 +1,45 @@
+{
+  "paper_id": "aspen",
+  "title": "The paper's full title, verbatim",
+  "citation": "First author et al., Journal, Year",
+  "github": [
+    "https://github.com/ewonglab/ASPEN",
+    "https://github.com/ewonglab/ASPEN_manuscript"
+  ],
+  "data_accessions": [
+    "GSE000000 (what this dataset is, and what it is used for in the paper)"
+  ],
+  "annotation_provenance": {
+    "tier": 2,
+    "type": "cold-read annotation",
+    "annotators": [
+      "Your Name"
+    ],
+    "source": "The paper, its supplement, and the linked repository, read without attempting execution",
+    "annotation_date": "2026-11-14"
+  },
+  "blockers": [
+    {
+      "severity": "hard",
+      "description": "What a reproducer cannot obtain, and why that stops them. 'hard' means reproduction is impossible without it; 'major' means it must be guessed; 'minor' means it costs time. NOT 'hard_blocker' -- that is the app's word, not a record's.",
+      "resolved": false
+    }
+  ],
+  "scoring_rubric_v0.1": {
+    "data_availability": 0,
+    "code_availability": 0,
+    "environment_specification": 0,
+    "method_completeness": 0,
+    "parameters_configuration": 0,
+    "execution_instructions": 0,
+    "result_traceability": 0,
+    "total": 0,
+    "notes": "Why the low scores are low. Score what the paper DOCUMENTS, before anyone tries to run it."
+  },
+  "severity_summary": {
+    "hard_blockers": 1,
+    "major_issues": 0,
+    "minor_issues": 0
+  },
+  "readiness_score": 0
+}
