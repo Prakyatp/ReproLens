@@ -60,6 +60,30 @@ _FLAG_BOLD = 16
 # (units, exponents, footnote daggers) is kept.
 _CITATION_MARKER = re.compile(r"^[\d,–—\-\s]+$")
 
+# The number an exponent would be raising: the trailing numeric run of the text
+# already rendered on this line. "2.22 × 10" -> "10", "QM9" -> "9".
+_TRAILING_NUMBER = re.compile(r"[\d.]+$")
+
+# Every sign an exponent opens with, in the forms the three PDFs actually use:
+# ASCII hyphen, en and em dash, the real minus sign, and the superscript minus
+# and plus glyphs. A citation marker never opens with any of them.
+_SIGNS = "-–—−⁻+⁺"
+
+# An exponent this module has opened and not yet filled, so the next
+# superscript continues it instead of starting another. MATES splits "10⁻⁶"
+# into two raised spans, "−" and "6". Requiring the caret to still be empty
+# is what keeps a citation marker printed just after a power ("10⁻⁵" then a
+# raised reference number) from being swallowed into the exponent.
+_OPEN_EXPONENT = re.compile(r"\^[-+]?$")
+
+# Unicode superscript glyphs, which some publishers put in the text itself
+# rather than raising a span. ASPEN does both in the same paper -- plus every
+# dash a publisher writes a minus with, in one ASCII normal form.
+_SUPERSCRIPT_DIGITS = str.maketrans(
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺–—−",
+    "0123456789-+---",
+)
+
 # A heading sits above the body size by more than float noise.
 _HEADING_SIZE_TOLERANCE = 0.3
 
@@ -159,15 +183,14 @@ def _blocks(page: pymupdf.Page) -> list[dict]:
             continue
         lines: list[Line] = []
         for line in block["lines"]:
-            kept = [span for span in line["spans"] if not _is_citation_marker(span)]
-            rendered = "".join(span["text"] for span in kept)
+            rendered, body = _render(line["spans"])
             if rendered.strip():
                 lines.append(
                     Line(
                         text=rendered,
-                        size=max(span["size"] for span in kept),
-                        bold=_all_bold(kept),
-                        prefix=_bold_prefix(kept),
+                        size=max(span["size"] for span in body),
+                        bold=_all_bold(body),
+                        prefix=_bold_prefix(body),
                     )
                 )
         if lines:
@@ -439,11 +462,115 @@ def _inherit_labels(pages: list[PageText]) -> None:
                 enclosing.append((mark.level, mark.label))
 
 
-def _is_citation_marker(span: dict) -> bool:
-    if not span["flags"] & _FLAG_SUPERSCRIPT:
+def _render(spans: list[dict]) -> tuple[str, list[dict]]:
+    """A line's text, and the spans that carry its typography.
+
+    Superscripts are read in order because what one *is* depends on what
+    precedes it, and the two kinds have to be told apart: a citation marker is
+    dropped, an exponent is kept and marked. The typography list excludes every
+    superscript, since a raised 8pt marker inside a 12pt line would otherwise
+    decide the line's size and clear its bold flag.
+    """
+    rendered = ""
+    body: list[dict] = []
+    for span in spans:
+        if not span["flags"] & _FLAG_SUPERSCRIPT or not span["text"].strip():
+            rendered += span["text"]
+            if span["flags"] & _FLAG_SUPERSCRIPT:
+                continue
+            body.append(span)
+            continue
+        if _is_exponent(span["text"], rendered):
+            rendered = _with_exponent(rendered, span["text"])
+        elif not _CITATION_MARKER.match(span["text"]):
+            rendered += span["text"]
+    return rendered, body or [span for span in spans if span["text"].strip()] or spans
+
+
+def _is_exponent(text: str, before: str) -> bool:
+    """Whether a superscript is a power rather than a reference number.
+
+    Measured on the three benchmark PDFs: 65 superscripts follow a digit, and
+    discarding all of them as citation markers deleted the exponent from every
+    p-value and every scientific-notation number in all three papers. ASPEN's
+    "p < 2.22 x 10**-16" was reported to a reader as "p < 2.22 x 10", MATES has
+    eight more of the same shape, and ALIGNN's weight decay of 10**-5 read as a
+    weight decay of 10.
+
+    Three signals separate them, and between them they classify all 65
+    correctly:
+
+    A power this module has already opened and not yet filled. The sign and the
+    digits do not always arrive together.
+
+    A leading sign. A citation marker is a list or a range and never opens with
+    a separator ("12", "4,5", "7-9"), while an exponent frequently does. This
+    is also the only thing that saves a negative exponent on a unit, where what
+    precedes is a letter: ALIGNN writes 10**21 Vm**-2.
+
+    Otherwise, what the superscript is attached to. An exponent is attached to a
+    number, so the text before it ends in a run of digits that no letter opens.
+    A marker is attached to a name -- and a name ending in a digit is exactly
+    what makes the simpler rule fail: QM9**46 in ALIGNN, CD74**37 and
+    Aldh18a1**57 in MATES are citations, not powers.
+    """
+    if _OPEN_EXPONENT.search(before):
+        return True
+    head = text.lstrip()
+    if head[:1] in _SIGNS:
+        # A sign with its digits attached is a power wherever it appears, which
+        # is the only thing that identifies one on a unit: ALIGNN writes
+        # "10**21 Vm**-2" and what precedes that second exponent is a letter.
+        # A sign standing alone is not enough, because the same glyph marks a
+        # cell-surface phenotype: ASPEN writes CD8+ T cells, twice.
+        if head[1:].strip():
+            return True
+    # Only a digit-shaped superscript can be a power. An ordinal suffix sits in
+    # exactly the position an exponent does -- "the 1" + "st" -- and reading it
+    # as one produced "the 1^st".
+    elif not _CITATION_MARKER.match(text):
         return False
-    text = span["text"]
-    return bool(text.strip()) and bool(_CITATION_MARKER.match(text))
+    stem = _exponent_stem(before)
+    digits = _TRAILING_NUMBER.search(stem)
+    if not digits:
+        return False
+    return not stem[: digits.start()][-1:].isalpha()
+
+
+def _exponent_stem(before: str) -> str:
+    """``before`` with a sign that arrived on its own stripped off.
+
+    The sign is not always part of the raised span. ASPEN sets the minus as an
+    ordinary ⁻ glyph and raises only the digits, so the text an exponent is
+    attached to ends in a sign rather than in the number itself.
+    """
+    stem = before.rstrip()
+    if stem[-1:] in _SIGNS:
+        stem = stem[:-1].rstrip()
+    return stem
+
+
+def _with_exponent(before: str, text: str) -> str:
+    """``before`` with ``text`` appended as a power, in one normal form.
+
+    Three encodings reach here and all three have to come out the same, because
+    a reader comparing two p-values should not have to know which publisher
+    raised which span: "10" + raised "-5", "10" + raised "−" + raised "6", and
+    "10⁻" + raised "16".
+    """
+    body = text.strip().translate(_SUPERSCRIPT_DIGITS)
+    trailing = text[len(text.rstrip()) :]
+    if _OPEN_EXPONENT.search(before):
+        return before + body + trailing
+
+    sign = ""
+    if body[:1] in "-+":
+        sign, body = ("+" if body[0] == "+" else "-"), body[1:]
+    stem = before.rstrip()
+    if stem[-1:] in _SIGNS:
+        sign = "+" if stem[-1] in "+⁺" else "-"
+        stem = _exponent_stem(before)
+    return f"{stem}^{sign}{body}{trailing}"
 
 
 def _link_uris(page: pymupdf.Page) -> list[str]:
