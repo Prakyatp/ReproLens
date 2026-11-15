@@ -85,6 +85,15 @@ _URL_ACCESSION = re.compile(r"acc=([A-Z]{3})(\d{4,9})")
 _PARENTHETICAL = re.compile(r"\(([^()]{0,240})\)")
 
 
+# Below this share of the rubric settled, no single score is published at all.
+# Half is the principled line rather than a tuned one: a ratio drawn from a
+# minority of the evidence describes the audit more than the paper. Observed
+# coverage on the five development papers is 70-89%, so nothing in that set is
+# near the gate -- which means the gate is untested against a real failure and
+# should be revisited once a paper trips it.
+MIN_COVERAGE = 0.5
+
+
 @dataclass(slots=True)
 class Criterion:
     name: str
@@ -123,6 +132,43 @@ class Assessment:
     def ceiling(self) -> int:
         return sum(c.ceiling for c in self.criteria if c.assessed)
 
+    @property
+    def determined(self) -> int:
+        """Points this audit actually settled, either way.
+
+        A criterion's weight splits three ways: ``floor`` was proven present,
+        ``weight - ceiling`` was proven absent, and the gap between is what the
+        audit could not tell. The first two are the evidence; the gap is the
+        audit's own limit and belongs in neither.
+        """
+        return sum(c.floor + c.weight - c.ceiling for c in self.criteria if c.assessed)
+
+    @property
+    def coverage(self) -> float:
+        """The share of the rubric this audit settled. 0.0 when nothing was."""
+        return self.determined / self.assessable if self.assessable else 0.0
+
+    @property
+    def score(self) -> float | None:
+        """One number: of what was settled, the share the paper documents.
+
+        ``None`` rather than a number when too little was settled to divide --
+        the fail-closed rule applied to the headline figure. A ratio computed
+        over a minority of the rubric would read as a verdict on the paper when
+        it is mostly a verdict on the audit.
+
+        The honest caveat, which the caller must publish alongside: excluding
+        undetermined points from the denominator imputes the paper's own
+        success rate onto them. So a paper the audit could barely read can
+        score *higher* than one it read thoroughly and found wanting, which is
+        why ``coverage`` is never optional to display. The alternatives are
+        worse -- counting undetermined as lost penalises a paper for this
+        tool's limits, and counting it as earned rewards being unreadable.
+        """
+        if not self.determined or self.coverage < MIN_COVERAGE:
+            return None
+        return self.floor / self.determined
+
     def counts(self) -> dict[str, int]:
         return {
             severity: len([i for i in self.issues if i.severity == severity])
@@ -135,6 +181,10 @@ class Assessment:
             "assessed_points": self.assessable,
             "score_floor": self.floor,
             "score_ceiling": self.ceiling,
+            "determined_points": self.determined,
+            "coverage": round(self.coverage, 4),
+            "score": round(self.score, 4) if self.score is not None else None,
+            "min_coverage": MIN_COVERAGE,
             "severity": self.counts(),
             "criteria": [asdict(c) for c in self.criteria],
             "issues": [asdict(i) for i in self.issues],

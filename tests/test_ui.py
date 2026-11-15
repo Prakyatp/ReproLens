@@ -43,6 +43,16 @@ def landing():
     return app
 
 
+def words(app) -> str:
+    """Every word the page renders, markdown and captions alike.
+
+    The score is a markdown block and the coverage that qualifies it is a
+    caption, so a test that reads only one of the two can pass while the page
+    publishes a bare percentage.
+    """
+    return " ".join([element.value for element in app.markdown] + [c.value for c in app.caption])
+
+
 def showing(result: Path):
     app = AppTest.from_file(str(UI), default_timeout=120)
     app.session_state["result_dir"] = str(result)
@@ -79,16 +89,44 @@ class TestTheResult:
         app = showing(result)
         assert not app.exception, [str(e.value) for e in app.exception]
 
-    def test_the_band_is_never_collapsed_to_one_number(self):
-        # The band is the product's whole thesis: the floor is what the paper
-        # documents, the gap is what could not be determined, and a single
-        # number would hide the difference.
+    def test_one_percentage_leads_the_page(self):
+        # This replaces a test that asserted the opposite -- that the floor and
+        # ceiling must always appear as a range and never collapse. The band
+        # still exists and is still drawn; what changed is the headline, which
+        # is now a single figure because "74-84" is not a result anybody can
+        # use. The band's information is kept in the caption and the bar.
         result = an_audit()
         if result is None:
             pytest.skip("no audit in output/")
         assessment = json.loads((result / "assessment.json").read_text())
-        text = " ".join(m.value for m in showing(result).markdown)
-        assert f"{assessment['score_floor']}–{assessment['score_ceiling']}" in text
+        text = words(showing(result))
+        if assessment.get("score") is None:
+            assert "Not scored" in text
+            return
+        assert f"{assessment['score']:.0%}" in text
+        assert "documented" in text
+
+    def test_the_percentage_never_appears_without_its_coverage(self):
+        # The score excludes undetermined points from its denominator, so it
+        # reads as better-established than it is unless coverage is beside it.
+        result = an_audit()
+        if result is None:
+            pytest.skip("no audit in output/")
+        assessment = json.loads((result / "assessment.json").read_text())
+        if assessment.get("score") is None:
+            pytest.skip("this audit publishes no score")
+        text = words(showing(result))
+        assert f"{assessment['coverage']:.0%}" in text
+
+    def test_the_page_does_not_call_the_number_reproducible(self):
+        # Nothing is executed, so no wording on the page may claim the work
+        # reproduces. The number measures what the paper writes down.
+        result = an_audit()
+        if result is None:
+            pytest.skip("no audit in output/")
+        text = words(showing(result)).lower()
+        assert "% reproducible" not in text
+        assert "no code was executed" in text
 
     def test_a_reader_warning_leads_the_page(self):
         # "Found nothing" and "could not read it" are different claims and only
