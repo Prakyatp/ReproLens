@@ -30,6 +30,7 @@ uv run streamlit run ui.py          # the same audit, read by a person
 ## The product
 
 ```bash
+ollama serve &                 # the figure channel reads through a local model
 uv run streamlit run ui.py
 ```
 
@@ -41,7 +42,18 @@ Nothing is kept. The upload and its audit live in a temporary directory for the
 length of the session and are deleted when another paper is dropped, so the
 page carries no state from the last visitor. The upload goes into an empty
 directory of its own and is passed to `audit.py` by path; nothing in it, or in
-any repository it points at, is ever executed.
+any repository it points at, is ever executed. Figures are read by a model
+served locally by Ollama (`qwen2.5vl:7b`), so a dropped manuscript is not sent
+anywhere to be read; `REPROLENS_VLM=anthropic` switches that to the API, which
+does send the figure images off this machine.
+
+The page states the condition of every channel above the result — text,
+figures, repositories, archives — whether each one ran or not. This is not
+decoration. The figure channel was once switched off here behind a hardcoded
+`--no-vlm`, and because nothing said so, every paper dropped on the page was
+scored as though its figures were empty. A channel that did not run and a
+channel that found nothing are indistinguishable unless the page distinguishes
+them, which is the same mistake this tool exists to catch papers making.
 
 The result is the score band, then two panels — **what is not available** and
 **what is**. Every row in either carries the link *the paper itself gave* and

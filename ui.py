@@ -23,6 +23,7 @@ assessed" is drawn as its own state rather than as a zero.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -33,8 +34,13 @@ from pathlib import Path
 import streamlit as st
 
 from reprolens.discovery.patterns import archive_url
+from reprolens.extraction import vlm
 
 ROOT = Path(__file__).resolve().parent
+
+# The vision backend the page audits with. Local by default, so a dropped
+# manuscript's figures are not sent anywhere to be read.
+VLM_BACKEND = os.environ.get("REPROLENS_VLM", "ollama")
 
 # Where the current paper's audit lives, for this session only.
 RESULT = "result_dir"
@@ -70,7 +76,12 @@ VERDICT_HELP = {
 
 
 def load(name: str) -> dict:
-    """One artifact of the current audit, or ``{}`` if it was not written."""
+    """One artifact of the current audit, or ``{}`` if it was not written.
+
+    ``figures.json`` is a list rather than an object; callers that read it
+    annotate accordingly. Either way an artifact the audit never wrote comes
+    back empty, and every caller has to treat empty as "not written".
+    """
     directory = st.session_state.get(RESULT)
     if not directory:
         return {}
@@ -241,9 +252,14 @@ def _process(upload) -> None:
 
     Archive lookups are left ON. With them off every dataset comes back
     "unchecked", and a page whose job is to say what is *not available* cannot
-    make that claim without asking the archive. Figure reading is left off: it
-    needs a vision backend that may not be running, and a missing backend
-    should not fail an audit.
+    make that claim without asking the archive.
+
+    Figure reading is also ON. It was off here once, on the reasoning that a
+    vision backend may not be running and a missing backend should not fail an
+    audit. The premise is true and the conclusion was wrong: it turned a
+    missing backend into a *silently* missing channel, so every paper audited
+    through this page was scored as though its figures held nothing. The
+    backend is probed instead, and when it cannot run the page says so.
     """
     _discard()
     workdir = Path(tempfile.mkdtemp(prefix="reprolens-"))
@@ -253,12 +269,24 @@ def _process(upload) -> None:
     source.write_bytes(upload.getbuffer())
     out = workdir / "out"
 
+    blocked = vlm.blocked(VLM_BACKEND)
     with st.status(f"Reading {upload.name} …", expanded=True) as status:
         st.write("extracting text, links and figures")
+        if blocked:
+            st.write(f"⚠ figures will NOT be read: {blocked}")
+        else:
+            st.write("reading each figure with the vision model — this is the slow part")
         st.write("cloning the repositories the paper points at")
         st.write("asking the archives whether each dataset is there")
         done = subprocess.run(  # noqa: S603 -- fixed argv, path written by us
-            [sys.executable, str(ROOT / "audit.py"), str(source), "--out", str(out), "--no-vlm"],
+            [
+                sys.executable,
+                str(ROOT / "audit.py"),
+                str(source),
+                "--out",
+                str(out),
+                f"--vlm={VLM_BACKEND}",
+            ],
             capture_output=True,
             text=True,
             cwd=ROOT,
@@ -332,6 +360,51 @@ def main() -> None:
         _landing()
 
 
+def channels(links: dict, figures: list) -> list[tuple[bool, str]]:
+    """The condition of every channel, as (ran, sentence) pairs.
+
+    Stated on the page unconditionally, and this is the point: a channel that
+    did not run is otherwise indistinguishable from a channel that ran and
+    found nothing. The figure channel spent weeks switched off behind a
+    hardcoded flag here, and nothing on the page said so -- every paper read
+    through it was reported as though its figures were empty. A per-channel
+    line cannot fix a channel, but it makes a dead one impossible to miss.
+
+    Each state is read from what the audit recorded about its own run --
+    ``attempted``, ``fetched``, a per-figure ``reading`` -- never inferred from
+    a count, because zero findings is exactly the ambiguity being resolved.
+    """
+    rows: list[tuple[bool, str]] = [(True, f"Text read by {links.get('backend', 'unknown')}")]
+
+    read = [f for f in figures if f.get("reading")]
+    if not figures:
+        rows.append((False, "No figures extracted"))
+    elif read:
+        model = read[0]["reading"].get("model", "an unnamed model")
+        rows.append((True, f"{len(read)} of {len(figures)} figures read by {model}"))
+    else:
+        rows.append((False, f"{len(figures)} figures extracted, NONE read"))
+
+    repo = links.get("repository") or {}
+    fetched = repo.get("repositories") or []
+    if repo.get("fetched") and fetched:
+        rows.append((True, f"{len(fetched)} repository/ies read"))
+    elif repo.get("fetched"):
+        rows.append((False, "No repository was reachable"))
+    else:
+        rows.append((False, "Repositories NOT fetched"))
+
+    datasets = links.get("datasets_resolved") or {}
+    summary = datasets.get("summary") or {}
+    if not datasets.get("attempted"):
+        rows.append((False, "Archives NOT asked"))
+    else:
+        checked = summary.get("checked", 0)
+        total = checked + summary.get("unchecked", 0)
+        rows.append((checked > 0, f"{checked} of {total} datasets checked against an archive"))
+    return rows
+
+
 def _results() -> None:
     assessment = load("assessment")
     links = load("links")
@@ -344,6 +417,17 @@ def _results() -> None:
             f"read by {links.get('backend', 'unknown')} \u00b7 "
             f"{links.get('n_segments', '?')} segment(s) \u00b7 "
             f"rubric {assessment.get('rubric_version', '?')}"
+        )
+        ran_mark, missing_mark = "\u2713", "\u26a0"
+        parts = [
+            f"{ran_mark if ran else missing_mark} {text}"
+            for ran, text in channels(links, load("figures") or [])
+        ]
+        st.markdown(
+            "<p style='font-size:0.82rem;color:#888;margin-top:-0.4rem'>"
+            + " \u00b7 ".join(parts)
+            + "</p>",
+            unsafe_allow_html=True,
         )
     with action:
         st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)

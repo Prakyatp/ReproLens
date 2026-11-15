@@ -222,3 +222,92 @@ class TestTheLinkThePaperGave:
             occurrences=[{"page": 1, "context": "(GSE1, https://x.org/acc?a=GSE1) and then"}],
         )
         assert url == "https://x.org/acc?a=GSE1"
+
+
+class TestTheChannelsThePageReportsOn:
+    """The regression this class exists for.
+
+    The page once called ``audit.py --no-vlm`` from a hardcoded argument list.
+    Every paper dropped on it was therefore scored as though its figures held
+    nothing, and the page said nothing about it -- the one confusion this whole
+    project is built to prevent, committed by the product itself.
+
+    Two things have to hold for that to stay fixed: the page must not switch
+    the channel off, and the page must state the channel's condition whether it
+    ran or not.
+    """
+
+    def test_the_page_does_not_switch_the_figure_channel_off(self):
+        source = Path("ui.py").read_text()
+        assert "--no-vlm" not in source, (
+            "ui.py is suppressing the figure channel again; an unread figure "
+            "then enters the score as a figure containing nothing"
+        )
+
+    def test_figures_extracted_but_unread_is_flagged_not_silent(self):
+        from ui import channels
+
+        figures = [{"figure_id": "f1", "reading": None}, {"figure_id": "f2", "reading": None}]
+        rows = channels({"backend": "pdf_text"}, figures)
+        figure_row = [row for row in rows if "figure" in row[1]]
+        assert len(figure_row) == 1
+        ran, text = figure_row[0]
+        assert ran is False
+        assert "NONE read" in text
+
+    def test_figures_that_were_read_name_the_model(self):
+        from ui import channels
+
+        figures = [{"figure_id": "f1", "reading": {"model": "qwen2.5vl:7b"}}]
+        ran, text = next(row for row in channels({}, figures) if "figure" in row[1])
+        assert ran is True
+        assert "qwen2.5vl:7b" in text
+
+    def test_no_figures_at_all_is_its_own_state(self):
+        from ui import channels
+
+        ran, text = next(row for row in channels({}, []) if "figure" in row[1])
+        assert ran is False
+        assert "No figures extracted" in text
+
+    def test_archives_not_asked_differs_from_nothing_found(self):
+        from ui import channels
+
+        not_asked = channels({"datasets_resolved": {"attempted": False}}, [])
+        assert (False, "Archives NOT asked") in not_asked
+
+        asked = channels(
+            {"datasets_resolved": {"attempted": True, "summary": {"checked": 0, "unchecked": 4}}},
+            [],
+        )
+        ran, text = next(row for row in asked if "datasets" in row[1])
+        assert ran is False
+        assert "0 of 4" in text
+
+    def test_repositories_not_fetched_differs_from_none_reachable(self):
+        from ui import channels
+
+        assert (False, "Repositories NOT fetched") in channels({"repository": {}}, [])
+        assert (False, "No repository was reachable") in channels(
+            {"repository": {"fetched": True, "repositories": []}}, []
+        )
+
+
+class TestWhetherTheVisionBackendCanRun:
+    """Asked before a run, so "could not read" never prints as "nothing there"."""
+
+    def test_an_unknown_backend_explains_itself(self):
+        from reprolens.extraction import vlm
+
+        reason = vlm.blocked("gpt4v")
+        assert reason is not None
+        assert "unknown vlm backend" in reason
+
+    def test_a_missing_ollama_model_names_the_pull_command(self):
+        from reprolens.extraction import vlm
+
+        reason = vlm.blocked("ollama", "a-model-nobody-has:0b")
+        # Only meaningful when a server is actually answering; when none is,
+        # the reason says *that* instead, which is equally the point.
+        assert reason is not None
+        assert "ollama pull a-model-nobody-has:0b" in reason or "ollama serve" in reason
