@@ -99,7 +99,22 @@ def read_text(path: Path, *, use_ocr: bool) -> tuple[list[PageText], list[str]]:
     return merged, notes
 
 
-def read_figures(path: Path, out_dir: Path, *, use_vlm: bool) -> tuple[list[dict], list[str]]:
+def vision_blocked(backend_name: str, model: str | None) -> str | None:
+    """Why the figure channel cannot run, asked before anything is extracted.
+
+    Asked up front so the reason reaches the report as a sentence a reader can
+    act on ("start `ollama serve`") rather than as an exception raised one
+    figure into the run -- and so that an unread figure is never tallied as a
+    figure holding nothing.
+    """
+    from reprolens.extraction import vlm
+
+    return vlm.blocked(backend_name, model)
+
+
+def read_figures(
+    path: Path, out_dir: Path, *, use_vlm: bool, blocked: str | None = None
+) -> tuple[list[dict], list[str]]:
     """The image channel. Figures are extracted regardless; the VLM is optional."""
     if path.suffix.lower() not in {".pdf"}:
         return [], ["figure extraction needs a PDF; skipped for this input."]
@@ -117,10 +132,12 @@ def read_figures(path: Path, out_dir: Path, *, use_vlm: bool) -> tuple[list[dict
         }
         for f in found
     ]
-    if not use_vlm:
+    if not use_vlm or blocked:
+        why = (blocked or "figure reading was switched off with --no-vlm").rstrip(".")
         return records, [
-            f"{len(records)} figures extracted but not read: no VLM run. "
-            f"Anything visible only in a figure is NOT represented in the findings."
+            f"{len(records)} figure(s) were extracted but NOT read, because {why}. "
+            f"Anything visible only in a figure is absent from the findings below -- "
+            f"this is a gap in the audit, not a gap in the paper."
         ]
     return records, []
 
@@ -338,11 +355,14 @@ def audit(
     # The image channel runs BEFORE scoring, because its corroborated readings
     # are evidence the rubric consults. It used to run after, which is why a
     # channel that worked contributed nothing to any score for weeks.
-    figure_records, figure_warnings = read_figures(path, paper_out, use_vlm=use_vlm)
+    blocked = vision_blocked(vlm_backend, vlm_model) if use_vlm else None
+    figure_records, figure_warnings = read_figures(
+        path, paper_out, use_vlm=use_vlm, blocked=blocked
+    )
     warnings += figure_warnings
 
     merged: Merge | None = None
-    if use_vlm and figure_records:
+    if use_vlm and not blocked and figure_records:
         found = figure_extract.extract(path, paper_out / "figures")
         try:
             vlm_warnings, merged = run_vlm(

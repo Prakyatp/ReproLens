@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -55,6 +56,16 @@ class VlmBackend(Protocol):
     model: str
 
     def read(self, image: bytes, prompt: str) -> FigureContents: ...
+
+    def unavailable(self) -> str | None:
+        """Why this backend cannot read a figure right now, or None if it can.
+
+        Asked *before* a run, so a caller can say "the figure channel did not
+        run, and here is why" instead of discovering it one figure in. The
+        distinction this whole project rests on applies to its own channels:
+        a figure nobody could read is not a figure containing nothing.
+        """
+        ...
 
 
 def build_prompt(figure: Figure) -> str:
@@ -113,6 +124,29 @@ class OllamaVlm:
         self.repeat_penalty = repeat_penalty
         self._host = host
 
+    def unavailable(self) -> str | None:
+        try:
+            import ollama
+        except ImportError:
+            return "the ollama Python package is not installed"
+        try:
+            client = ollama.Client(host=self._host) if self._host else ollama.Client()
+            served = {m.get("model") or m.get("name") for m in client.list().get("models", [])}
+        except Exception as error:  # server down, wrong host, refused connection
+            return (
+                f"no Ollama server answered ({type(error).__name__}). "
+                f"Start one with `ollama serve`."
+            )
+        # Ollama resolves a bare name to its ``:latest`` tag, so both spellings
+        # of the same model have to count as present.
+        wanted = {self.model, self.model.split(":")[0], f"{self.model.split(':')[0]}:latest"}
+        if not (served & wanted):
+            return (
+                f"Ollama is running but does not have {self.model}. "
+                f"Pull it with `ollama pull {self.model}`."
+            )
+        return None
+
     def read(self, image: bytes, prompt: str) -> FigureContents:
         import ollama
 
@@ -153,6 +187,15 @@ class AnthropicVlm:
     def __init__(self, model: str = "claude-opus-5-5"):
         self.model = model
 
+    def unavailable(self) -> str | None:
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            return "the anthropic Python package is not installed"
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return "ANTHROPIC_API_KEY is not set in the environment"
+        return None
+
     def read(self, image: bytes, prompt: str) -> FigureContents:
         import anthropic
 
@@ -189,6 +232,18 @@ def get_backend(name: str, model: str | None = None) -> VlmBackend:
         raise ValueError(f"unknown vlm backend {name!r}; known: {', '.join(sorted(BACKENDS))}")
     cls = BACKENDS[name]
     return cls(model=model) if model else cls()
+
+
+def blocked(name: str, model: str | None = None) -> str | None:
+    """Why the figure channel cannot run, or None when it can.
+
+    The one function both the CLI and the page ask, so they cannot disagree
+    about whether figures are being read.
+    """
+    try:
+        return get_backend(name, model).unavailable()
+    except ValueError as error:  # an unknown backend name
+        return str(error)
 
 
 def shape_errors(contents: FigureContents) -> list[str]:
