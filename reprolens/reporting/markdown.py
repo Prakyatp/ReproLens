@@ -162,19 +162,47 @@ def _heading(report: dict) -> list[str]:
             "",
         ]
 
+    determined = assessment.get("determined_points", 0)
+    coverage = assessment.get("coverage", 0.0)
+    score = assessment.get("score")
+    minimum = assessment.get("min_coverage", 0.5)
+
+    issues = (
+        f"{_plural(counts.get('hard_blocker', 0), 'hard blocker')}, "
+        f"{counts.get('major', 0)} major and "
+        f"{_plural(counts.get('minor', 0), 'minor issue')}"
+    )
+    if score is None:
+        # The issue counts survive a withheld percentage. They are findings in
+        # their own right, established by evidence, and suppressing them would
+        # make "not scored" read as "nothing wrong found".
+        headline = (
+            f"**Not scored.** Only {coverage:.0%} of the rubric could be settled either "
+            f"way, below the {minimum:.0%} required before a single figure is published. "
+            f"Established regardless: {issues}."
+        )
+    else:
+        headline = (
+            f"**{score:.0%} documented** "
+            f"({floor} of {determined} settled points, rubric "
+            f"{assessment.get('rubric_version', '?')}), "
+            f"at {coverage:.0%} coverage of the rubric, {issues}."
+        )
+
     out = [
         title,
         "",
-        f"**{floor}-{ceiling} of {total} assessable points** "
-        f"(rubric {assessment.get('rubric_version', '?')}), "
-        f"{_plural(counts.get('hard_blocker', 0), 'hard blocker')}, "
-        f"{counts.get('major', 0)} major and "
-        f"{_plural(counts.get('minor', 0), 'minor issue')}.",
+        headline,
         "",
         "This measures how much of what a reproduction needs is *written down*. It is not a",
         "claim that the work reproduces, and it is not a claim that it does not: nothing here",
-        "was executed. The range is the uncertainty -- the floor is what the evidence proves,",
-        "the ceiling adds back what this audit could not settle either way.",
+        "was executed.",
+        "",
+        f"The band is **{floor}-{ceiling} of {total}**: the floor is what the evidence proves,",
+        "the ceiling adds back what this audit could not settle either way. The percentage",
+        "divides by the settled points only, so unsettled ones are never counted against the",
+        "paper -- which also means a paper this audit could barely read scores as though its",
+        "unread parts matched its read ones. Coverage is how much to trust the percentage.",
         "",
     ]
     criteria = assessment.get("criteria", [])

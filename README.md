@@ -55,7 +55,7 @@ scored as though its figures were empty. A channel that did not run and a
 channel that found nothing are indistinguishable unless the page distinguishes
 them, which is the same mistake this tool exists to catch papers making.
 
-The result is the score band, then two panels — **what is not available** and
+The result is the score, then two panels — **what is not available** and
 **what is**. Every row in either carries the link *the paper itself gave* and
 the place in the paper that named it: page, section, and the sentence verbatim.
 
@@ -227,7 +227,30 @@ appears nowhere in it. The grader reports those separately as
 `not-in-paper` rather than counting them against recall, because no reading of
 the paper recovers them.
 
-## Scoring: a band, not a number
+## Scoring: one number, and what it is a number of
+
+The headline is a single percentage: **of the rubric points this audit settled
+either way, the share the paper documents.** ASPEN scores 81% at 89% coverage;
+MATES 87% at 70%.
+
+It is a percentage of *documentation*, not of reproducibility. Nothing is
+executed, so the tool cannot and does not claim the work runs. "81%" means
+four fifths of what could be checked is written down.
+
+The denominator is the point. A criterion's weight splits three ways: proven
+present, proven absent, and undetermined. The percentage divides by the first
+two only, so a paper is never penalised for what this tool could not settle.
+That has a consequence worth stating plainly rather than hiding: **excluding
+undetermined points imputes the paper's own success rate onto them**, so a paper
+this audit could barely read can score higher than one it read thoroughly and
+found wanting. MATES is exactly that case — its 87% rests on 70% coverage, where
+ASPEN's 81% rests on 89%. This is why coverage is never displayed without the
+score, and why below 50% coverage no percentage is published at all: a ratio
+drawn from a minority of the evidence describes the audit, not the paper.
+
+The floor-ceiling band is still computed, still in `assessment.json`, and still
+drawn under the headline. What changed is that it is no longer the headline,
+because `74-84` is not a result anyone can act on.
 
 Blueprint §21 says the score must not be invented by a model, so nothing here
 asks one. Every point traces to a finding or a checklist entry.

@@ -465,18 +465,53 @@ def _results() -> None:
 
 
 def _headline(assessment: dict) -> None:
+    """The one number, the coverage that qualifies it, and the issue counts.
+
+    The score and the coverage are rendered together and neither is available
+    without the other, because the score alone is misreadable in a specific
+    way: undetermined points leave the denominator, so a paper this audit could
+    barely read scores as though its unread parts were as good as its read
+    ones. Coverage is what tells a reader how much the number rests on.
+    """
     floor = assessment["score_floor"]
     ceiling = assessment["score_ceiling"]
     assessed = assessment["assessed_points"]
+    determined = assessment.get("determined_points", 0)
+    coverage = assessment.get("coverage", 0.0)
+    score = assessment.get("score")
 
     left, right = st.columns([3, 2])
     with left:
-        st.markdown(f"### Readiness **{floor}–{ceiling}** / {assessed}")
-        st.markdown(band(floor, ceiling, assessed, height=34), unsafe_allow_html=True)
+        if score is None:
+            st.markdown("### Not scored")
+            st.warning(
+                f"Only {coverage:.0%} of the rubric could be settled either way, below the "
+                f"{assessment.get('min_coverage', 0.5):.0%} this tool requires before it "
+                f"publishes a single figure. A percentage drawn from this little evidence "
+                f"would describe the audit, not the paper. The panels below still hold "
+                f"everything that *was* established."
+            )
+        else:
+            st.markdown(
+                f"<div style='font-size:3.4rem;line-height:1;font-weight:650;"
+                f"color:#2f6f4f'>{score:.0%}</div>"
+                f"<div style='font-size:0.95rem;color:#444;margin-top:0.2rem'>"
+                f"of what could be checked is <b>documented</b></div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(band(floor, ceiling, assessed, height=34), unsafe_allow_html=True)
+            st.caption(
+                f"**{floor} of {determined} settled points** documented. "
+                f"The audit settled **{coverage:.0%}** of the rubric; the hatched "
+                f"**{ceiling - floor}** points it could not settle are excluded from the "
+                f"percentage rather than counted against the paper — so the lower the "
+                f"coverage, the more this number is an estimate."
+            )
+        # Unconditional, including when no percentage is published: the claim
+        # being disclaimed is about the whole page, not about the number.
         st.caption(
-            f"**{floor}** points the paper documents outright. The hatched "
-            f"**{ceiling - floor}** is not partial credit — it is the range this "
-            f"reader could not narrow, and a paper is never penalised for it."
+            "This measures what the paper **writes down**, not whether it runs. "
+            "No code was executed."
         )
     with right:
         severity = assessment.get("severity", {})
