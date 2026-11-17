@@ -61,6 +61,8 @@ class Occurrence:
     confidence: float | None = None
     section: SectionLabel = "front_matter"
     section_heading: str = ""  # as printed, when the document named it
+    # Empty for the article; the supplement's label otherwise. See PageText.
+    document: str = ""
 
 
 @dataclass(slots=True)
@@ -161,6 +163,7 @@ def _scan_page(page: PageText, resolver: SectionResolver) -> list[tuple[str, str
             confidence=page.confidence,
             section=label,
             section_heading=heading,
+            document=page.document,
         )
 
     # The body, where position is known precisely. Offsets come back mapped to
@@ -168,7 +171,7 @@ def _scan_page(page: PageText, resolver: SectionResolver) -> list[tuple[str, str
     body, offsets = normalize_with_offsets(page.text)
     in_text: set[tuple[str, str]] = set()
     for value, kind, start, end in _matches(body):
-        mark = resolver.at(page.page, offsets[start])
+        mark = resolver.at(page.page, offsets[start], page.document)
         in_text.add((kind, value))
         results.append(
             (value, kind, occurrence("text", _context(body, start, end), mark.label, mark.heading))

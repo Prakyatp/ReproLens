@@ -477,7 +477,7 @@ def build(pages: list[PageText]) -> Checklist:
                 if any(start < c_end and end > c_start for c_start, c_end in claimed):
                     continue
                 claimed.append((start, end))
-                section = resolver.at(page.page, offsets[start]).label
+                section = resolver.at(page.page, offsets[start], page.document).label
                 _record(found, name, kind, section, text, start, end)
 
         for match in _FLAG.finditer(text):

@@ -19,7 +19,9 @@ from reprolens.documents.sections import SectionMark
 
 BBox = tuple[float, float, float, float]
 
-Backend = Literal["pdf_text", "jats_xml", "ocr", "vlm"]
+# "text" is a document that arrived as plain rows rather than pages -- a
+# spreadsheet, a CSV, a Word file dropped alongside the paper as a supplement.
+Backend = Literal["pdf_text", "jats_xml", "ocr", "vlm", "text"]
 
 # A page with fewer than this many characters, on a page that carries images, is
 # treated as unreadable rather than empty. See PageText.needs_ocr.
@@ -44,6 +46,11 @@ class PageText:
     confidence: float | None = None  # None means exact (text layer); OCR sets a real value
     sections: list[SectionMark] = field(default_factory=list)  # offsets into .text
     furniture: list[str] = field(default_factory=list)  # running header/footer lines
+    # Which document this page belongs to. Empty for the article itself; the
+    # supplement's label or filename otherwise. Provenance has to be able to say
+    # "Supplementary Table 2, page 3" and not just "page 3", because a page
+    # number alone points into the wrong file once there is more than one.
+    document: str = ""
 
     @property
     def furniture_text(self) -> str:

@@ -152,14 +152,20 @@ class SectionResolver:
 
     __slots__ = ("_keys", "_marks")
 
-    def __init__(self, marks: Sequence[tuple[int, int, SectionMark]]) -> None:
-        ordered = sorted(marks, key=lambda m: (m[0], m[1]))
-        self._keys = [(page, offset) for page, offset, _ in ordered]
-        self._marks = [mark for _, _, mark in ordered]
+    def __init__(self, marks: Sequence[tuple[str, int, int, SectionMark]]) -> None:
+        ordered = sorted(marks, key=lambda m: (m[0], m[1], m[2]))
+        self._keys = [(document, page, offset) for document, page, offset, _ in ordered]
+        self._marks = [mark for _, _, _, mark in ordered]
 
-    def at(self, page: int, offset: int = 0) -> SectionMark:
-        index = bisect_right(self._keys, (page, offset)) - 1
-        if index < 0:
+    def at(self, page: int, offset: int = 0, document: str = "") -> SectionMark:
+        """The section in force at this point of this document.
+
+        Keyed by document first, because a supplement dropped beside the paper
+        has its own page 1, and carry-over must not run from the article's last
+        heading into the supplement's first page -- or the other way round.
+        """
+        index = bisect_right(self._keys, (document, page, offset)) - 1
+        if index < 0 or self._keys[index][0] != document:
             return SectionMark(offset=0, heading="", label=DEFAULT_LABEL, level=1)
         return self._marks[index]
 
@@ -171,5 +177,9 @@ class SectionResolver:
 def resolve(pages: Sequence) -> SectionResolver:
     """Build a resolver from pages carrying ``sections``."""
     return SectionResolver(
-        [(page.page, mark.offset, mark) for page in pages for mark in page.sections]
+        [
+            (getattr(page, "document", ""), page.page, mark.offset, mark)
+            for page in pages
+            for mark in page.sections
+        ]
     )
