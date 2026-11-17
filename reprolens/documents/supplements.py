@@ -36,8 +36,11 @@ the paper declares and says plainly that the contents were never read.
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -126,11 +129,54 @@ class Reference:
 
 
 @dataclass(slots=True)
+class Received:
+    """One supplementary file that was dropped beside the paper and opened.
+
+    The only way a supplement's *contents* enter this audit. The archives gate
+    programmatic downloads (see the module docstring), so the reader supplies
+    the file, and this records what was done with it: how it was read, how
+    much came out, and which of the paper's own supplement labels it answers
+    to -- "S2 Appendix", "Supplementary Table 3" -- matched from its filename
+    and its opening text, so a Methods deferral can be marked as covered.
+    """
+
+    filename: str
+    readable: bool
+    backend: str = ""
+    pages: int = 0
+    chars: int = 0
+    covers: list[str] = field(default_factory=list)
+    declared_as: str = ""
+    kind: str = "other"
+    note: str = ""
+
+    @property
+    def document(self) -> str:
+        """The name provenance uses for this file."""
+        return self.declared_as or (self.covers[0] if self.covers else self.filename)
+
+    def as_dict(self) -> dict:
+        return asdict(self) | {"document": self.document}
+
+
+@dataclass(slots=True)
 class Supplements:
     inventory: str = INVENTORY_UNAVAILABLE
     declared: list[Supplement] = field(default_factory=list)
     referenced: list[Reference] = field(default_factory=list)
+    received: list[Received] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def covered(self) -> set[str]:
+        """Supplement labels whose contents were actually read."""
+        return {label for r in self.received if r.readable for label in r.covers}
+
+    @property
+    def deferred_unread(self) -> list[Reference]:
+        """Methods deferrals no received file answers to -- the ones still outside the audit."""
+        covered = self.covered
+        return [r for r in self.deferred_from_methods if r.label not in covered]
 
     @property
     def method_bearing(self) -> list[Supplement]:
@@ -154,17 +200,28 @@ class Supplements:
                 "may_carry_method_detail": len(self.method_bearing),
                 "referenced_in_prose": len(self.referenced),
                 "deferred_from_methods": len(self.deferred_from_methods),
-                "contents_read": 0,
+                "deferred_unread": len(self.deferred_unread),
+                "received": len(self.received),
+                "contents_read": sum(1 for r in self.received if r.readable),
             },
             "notes": self.notes,
             "declared_files": [s.as_dict() for s in self.declared],
             "references": [r.as_dict() for r in self.referenced],
+            "received_files": [r.as_dict() for r in self.received],
         }
 
 
-def collect(path: Path, pages: list[PageText]) -> Supplements:
-    """The paper's supplements: what it declares, and what its prose relies on."""
+def collect(
+    path: Path, pages: list[PageText], received: list[Received] | None = None
+) -> Supplements:
+    """The paper's supplements: what it declares, what its prose relies on, what was read.
+
+    ``pages`` are the article's own pages, not the supplements' -- a supplement
+    titled "Supplementary Table 1" would otherwise count as a reference to
+    itself.
+    """
     result = Supplements()
+    result.received = list(received or [])
 
     if path.suffix.lower() == ".xml":
         result.inventory = DECLARED
@@ -178,20 +235,56 @@ def collect(path: Path, pages: list[PageText]) -> Supplements:
 
     result.referenced = references(pages)
 
+    # A received file is matched to the declared inventory by filename, so a
+    # JATS-declared "pcbi.s012.docx" dropped in under that name is known to be
+    # S2 Appendix even if nothing inside it says so.
+    by_filename = {d.filename: d for d in result.declared if d.filename}
+    for item in result.received:
+        declared = by_filename.get(item.filename)
+        if declared and not item.declared_as:
+            item.declared_as = declared.label
+            item.kind = declared.kind
+            if declared.label not in item.covers:
+                item.covers.append(declared.label)
+
+    read = [r for r in result.received if r.readable]
+    unread = [r for r in result.received if not r.readable]
+    if read:
+        result.notes.append(
+            f"{len(read)} supplementary file(s) were supplied alongside the paper and read "
+            f"({', '.join(r.document for r in read[:4])}); what they state is in the "
+            f"findings below with its provenance."
+        )
+    if unread:
+        result.notes.append(
+            f"{len(unread)} supplied supplementary file(s) could not be read "
+            f"({', '.join(f'{r.filename}: {r.note}' for r in unread[:3])}). Their contents "
+            f"are absent from this audit -- a gap in the audit, not in the paper."
+        )
+
     if result.declared:
         bearing = result.method_bearing
-        result.notes.append(
-            f"{len(result.declared)} supplementary file(s) declared, {len(bearing)} of which "
-            f"could carry method detail. None were downloaded or read: the archives gate "
-            f"supplement files against automated access, so anything stated only in a "
-            f"supplement is outside this audit."
-        )
+        missing = [d for d in bearing if d.label not in result.covered]
+        if missing:
+            result.notes.append(
+                f"{len(result.declared)} supplementary file(s) declared, {len(bearing)} of "
+                f"which could carry method detail; {len(missing)} of those were not supplied "
+                f"({', '.join(d.label for d in missing[:4])}). The archives gate supplement "
+                f"files against automated access, so drop them beside the paper to have "
+                f"them read; until then anything stated only there is outside this audit."
+            )
     deferred = result.deferred_from_methods
-    if deferred:
+    still = result.deferred_unread
+    if deferred and still:
+        result.notes.append(
+            f"the Methods section defers to {len(deferred)} supplementary item(s), "
+            f"{len(still)} of which were not supplied ({', '.join(r.label for r in still[:4])}); "
+            f"the detail they carry was not assessed either way."
+        )
+    elif deferred:
         result.notes.append(
             f"the Methods section defers to {len(deferred)} supplementary item(s) "
-            f"({', '.join(r.label for r in deferred[:4])}); the detail they carry was not "
-            f"assessed either way."
+            f"({', '.join(r.label for r in deferred[:4])}), all of which were supplied and read."
         )
     return result
 
@@ -366,3 +459,162 @@ def _section_at(sections, offset: int) -> str:
         else:
             break
     return label
+
+
+# ---------------------------------------------------------------------------
+# Reading supplied files
+
+READABLE = frozenset({".pdf", ".xlsx", ".xlsm", ".csv", ".tsv", ".txt", ".md", ".docx", ".xml"})
+
+# How much of a file's opening text is searched for the labels it answers to.
+# The first page of a supplement is where "Supplementary Table 2" is printed.
+_LABEL_WINDOW = 3000
+
+
+def read_files(paths: list[Path], *, use_ocr: bool = True) -> tuple[list[PageText], list[Received]]:
+    """Open every supplied supplement, returning its pages and a record per file.
+
+    PDFs go through the same reader as the article (text layer, OCR fallback).
+    Spreadsheets, delimited text and Word files become one page per sheet or
+    file, read as plain rows. Anything else is recorded as received and
+    unreadable rather than dropped, so the report can say a file arrived that
+    the audit could not open.
+    """
+    from reprolens.documents.reading import read_pages
+
+    pages: list[PageText] = []
+    received: list[Received] = []
+    for path in paths:
+        suffix = path.suffix.lower()
+        item = Received(filename=path.name, readable=False)
+        try:
+            if suffix == ".pdf":
+                # The article-level gate (is_readable) is calibrated for a
+                # paper and would reject a one-page supplementary note as
+                # unread. A supplement is readable if any text came out of
+                # it; the OCR fallback inside read_pages still applies.
+                got, _notes = read_pages(path, use_ocr=use_ocr)
+                got = [p for p in got if p.char_count]
+                if not got:
+                    item.note = "no text came out of it, even with OCR"
+                else:
+                    item.backend = got[0].backend
+            elif suffix in {".xlsx", ".xlsm"}:
+                got = _sheets(path)
+                item.backend = "text"
+            elif suffix in {".csv", ".tsv", ".txt", ".md"}:
+                got = [_text_page(path.read_text(encoding="utf-8", errors="replace"))]
+                item.backend = "text"
+            elif suffix == ".docx":
+                got = [_text_page(_docx_text(path))]
+                item.backend = "text"
+            elif suffix == ".xml":
+                got, _ = read_pages(path, use_ocr=False)
+                item.backend = "jats_xml"
+            else:
+                got = []
+                item.note = f"a {suffix.lstrip('.') or 'binary'} file is not a format this reads"
+        except Exception as error:  # a corrupt or password-protected file
+            got = []
+            item.note = f"could not be opened ({type(error).__name__})"
+
+        got = [p for p in got if p.char_count]
+        if got:
+            item.readable = True
+            item.pages = len(got)
+            item.chars = sum(p.char_count for p in got)
+            head = " ".join(p.text for p in got)[:_LABEL_WINDOW]
+            item.covers = labels_in(f"{_words(path.stem)} {head}")
+            item.kind = classify(" ".join(item.covers), head[:200])
+        elif not item.note:
+            item.note = "the file was empty"
+
+        name = item.document
+        for page in got:
+            page.document = name
+        pages += got
+        received.append(item)
+    return pages, received
+
+
+def labels_in(text: str) -> list[str]:
+    """Every distinct supplement label the text names, in order of appearance."""
+    seen: list[str] = []
+    # Filenames spell the label with underscores; the pattern wants spaces.
+    for match in _REFERENCE.finditer(text.replace("_", " ")):
+        label = _label(match)
+        if label and label not in seen:
+            seen.append(label)
+    return seen
+
+
+def _words(stem: str) -> str:
+    """``Supplementary_Table_S2`` -> ``Supplementary Table S2``, so a filename can match."""
+    return re.sub(r"[_\-]+", " ", stem)
+
+
+def _text_page(text: str, page: int = 1) -> PageText:
+    return PageText(page=page, text=text, backend="text")
+
+
+def _sheets(path: Path) -> list[PageText]:
+    """One page per worksheet, cells joined by tabs so a row reads as a row."""
+    import openpyxl
+
+    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    pages: list[PageText] = []
+    for number, sheet in enumerate(book.worksheets, start=1):
+        lines = [sheet.title]
+        version_column: int | None = None
+        for row in sheet.iter_rows(values_only=True):
+            cells = ["" if v is None else str(v).strip() for v in row]
+            if not any(cells):
+                continue
+            lower = [c.lower() for c in cells]
+            if version_column is None and any(c in _VERSION_HEADERS for c in lower):
+                # The header row itself: remember which column it says holds
+                # versions. "tool | version" is how every software table is
+                # laid out, and the header is the table saying so.
+                version_column = next(i for i, c in enumerate(lower) if c in _VERSION_HEADERS)
+                lines.append("\t".join(cells).rstrip())
+                continue
+            if version_column is not None and len(cells) > version_column:
+                name = next((c for i, c in enumerate(cells) if i != version_column and c), "")
+                value = cells[version_column]
+                if name and value:
+                    # Spelled the way prose spells it, so the same extractor
+                    # that reads "STAR version 2.7.10a" in Methods reads it here.
+                    lines.append(f"{name} version {value}")
+                    continue
+            lines.append("\t".join(cells).rstrip())
+        pages.append(_text_page("\n".join(lines), page=number))
+    book.close()
+    return pages
+
+
+_VERSION_HEADERS = frozenset({"version", "ver", "release", "software version", "tool version"})
+
+
+def _docx_text(path: Path) -> str:
+    """The paragraphs of a Word file, without a Word library.
+
+    A .docx is a zip whose ``word/document.xml`` holds the text in ``<w:t>``
+    runs; paragraphs end at ``</w:p>``. That is enough to recover the prose
+    and the tables as lines, which is all the extractors need.
+    """
+    with zipfile.ZipFile(path) as archive:
+        raw = archive.read("word/document.xml").decode("utf-8", errors="replace")
+    raw = re.sub(r"</w:p>", "\n", raw)
+    raw = re.sub(r"</w:tc>", "\t", raw)
+    text = re.sub(r"<[^>]+>", "", raw)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _delimited(text: str) -> list[list[str]]:
+    """Rows of a delimited file, for callers that want cells rather than lines."""
+    sample = text[:2000]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel
+    return list(csv.reader(io.StringIO(text), dialect))

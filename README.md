@@ -30,69 +30,69 @@ uv run streamlit run ui.py          # the same audit, read by a person
 ## The product
 
 ```bash
-ollama serve &                 # the figure channel reads through a local model
-uv run streamlit run ui.py
+ollama serve &                   # the figure channel reads through a local model
+uv run python -m app.server      # http://localhost:8765
 ```
 
-One page. Drop a paper in the middle of it; the audit runs; the result comes
-out. There is no paper library and no sidebar: the five papers this project was
-developed against are a verification set, not furniture for the product.
+One page. Drop a paper in the middle of it, add the supplementary files beside
+it if you have them, and the audit runs while the page shows what it is doing
+-- which figure of how many it is reading, which repository it is cloning --
+and then the result comes out. There is no paper library: the five papers this
+project was developed against are a verification set, not furniture for the
+product.
 
-Nothing is kept. The upload and its audit live in a temporary directory for the
-length of the session and are deleted when another paper is dropped, so the
-page carries no state from the last visitor. The upload goes into an empty
-directory of its own and is passed to `audit.py` by path; nothing in it, or in
+The result is the score with the coverage it must never appear without, the
+condition of every channel (text, OCR, figures, supplements, repositories,
+archives -- stated whether each ran or not), and then the evidence in tabs:
+**what is not available** and **what is**, each row with the link *the paper
+itself gave* and the place that named it; the score per criterion as a band;
+every figure as it was cut from the page with what the vision model read in
+it; and what the paper's supplements declare, defer to, and which of them were
+supplied and read.
+
+Nothing is kept. The upload goes into an empty directory of its own and is
+passed to `audit.py` by path; the directory is deleted when the audit is
+deleted, evicted, or the server stops. Nothing in the paper, and nothing in
 any repository it points at, is ever executed. Figures are read by a model
 served locally by Ollama (`qwen2.5vl:7b`), so a dropped manuscript is not sent
 anywhere to be read; `REPROLENS_VLM=anthropic` switches that to the API, which
-does send the figure images off this machine.
+does send the figure images off this machine. The server binds to localhost;
+`REPROLENS_HOST` changes that, and doing so is a decision about who may upload.
 
-The page states the condition of every channel above the result — text,
-figures, repositories, archives — whether each one ran or not. This is not
-decoration. The figure channel was once switched off here behind a hardcoded
-`--no-vlm`, and because nothing said so, every paper dropped on the page was
-scored as though its figures were empty. A channel that did not run and a
-channel that found nothing are indistinguishable unless the page distinguishes
-them, which is the same mistake this tool exists to catch papers making.
+The web page is a thin layer: `app/server.py` runs `audit.py --progress` as a
+subprocess and relays its events, and every number it shows comes from
+`reprolens/reporting/view.py`, which is the one place presentation rules live
+so that no front end can disagree with the CLI report about an audit.
+`ui.py` is the earlier Streamlit page and still runs (`uv run streamlit run
+ui.py`); it is kept for now and is not the product.
 
-The result is the score, then two panels — **what is not available** and
-**what is**. Every row in either carries the link *the paper itself gave* and
-the place in the paper that named it: page, section, and the sentence verbatim.
+### Supplements
 
-Whose link it is matters, and is the one thing this panel has to get right. A
-GEO landing page looks identical whether the paper printed it or this tool
-built it from the accession, so the two are only distinguishable if the page
-says which:
+Methods detail migrates to the supplement constantly, and the archives gate
+supplement downloads against automated access (PMC serves a reCAPTCHA page
+with HTTP 200; PLOS and Springer return 403). Those gates are respected, so
+the supplements come in the only honest way: dropped beside the paper, by the
+reader. `audit.py --supplement FILE` does the same from the command line.
 
-- **the paper's own link** — read out of the text beside the identifier. MATES's
-  Data availability statement writes `(GSE212945, https://www.ncbi.nlm.nih.gov/
-  geo/query/acc.cgi?acc=GSE212945)` for 5 of its 10 accessions.
-- **no link** — stated plainly. ASPEN, LocusMasterTE and the other half of MATES
-  name an accession and leave the reader to find it.
-- **a constructed lookup** — offered beside it, labelled "built from the
-  identifier, not a link the paper gave".
+Each file goes through the same readers as the article -- a PDF through the
+text layer with OCR for pages that have none, a spreadsheet one page per sheet,
+a Word file as its paragraphs, delimited text as rows -- and every page it
+yields carries the supplement's name, so a finding's provenance reads
+`S2 Appendix, page 3` rather than a page number that points into the wrong
+file. A spreadsheet whose header names a version column is read as versions:
+the header is the table saying what that column is. A file matched to a label
+the Methods defer to ("as described in Supplementary Table S2") clears that
+deferral; one that cannot be read is recorded as received and unreadable, which
+is a gap in the audit and is reported as one.
 
-That middle case is why accession links are read from the surrounding text
-rather than from the `url` findings: the accession pattern claims the span
-first, so none of MATES's five GEO URLs survives as a separate `url` finding.
-Comparing the accession list against the url list reports that no paper links
-anything — which is what I concluded the first time, and it was wrong.
+### OCR
 
-Archive lookups run, because a page whose job is to say what is *not available*
-cannot make that claim without asking the archive. Figure reading does not: it
-needs a vision backend that may not be running, and a missing backend should
-not fail an audit.
-
-The page extracts nothing itself — every number on it came out of a JSON file
-`audit.py` wrote. It is tested by being run: `tests/test_ui.py` drives both
-states through Streamlit's `AppTest`, because an early version returned HTTP
-200 in a browser while raising `TypeError: unhashable type: 'slice'` on every
-paper. A live server answering 200 would never have shown that.
-
-`.streamlit/config.toml` binds it to `localhost`. Streamlit's default listens
-on every interface and prints an "External URL" on the machine's public
-address, which would put a paper's audit — and any unpublished data named in it
-— on whatever network the laptop is attached to.
+The scanned-paper fallback runs *before* the readability gate. It used to run
+after, and the order was the bug: a fully scanned paper has no text layer on
+any page, so it tripped "THE DOCUMENT WAS NOT READ" first and the fallback that
+exists for exactly that document never ran. `tests/test_reading.py` rasterises
+a born-digital PDF, throws the text layer away, and checks the accessions come
+back.
 
 ## Two commands, kept apart
 

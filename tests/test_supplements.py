@@ -117,7 +117,7 @@ class TestNoManifestIsNotNoSupplements:
 
     def test_the_note_says_the_contents_were_never_read(self, tmp_path):
         out = collect(write(tmp_path, "a.xml", JATS), [page("x")])
-        assert any("None were downloaded or read" in n for n in out.notes)
+        assert any("were not supplied" in n for n in out.notes)
         assert out.to_dict()["summary"]["contents_read"] == 0
 
 

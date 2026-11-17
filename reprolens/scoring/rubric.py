@@ -796,7 +796,18 @@ def _method_completeness(repo: RepoAnalysis, supplements: Supplements | None = N
 
     if supplements is not None:
         deferred = supplements.deferred_from_methods
-        if deferred:
+        unread = supplements.deferred_unread
+        covered = [r for r in deferred if r not in unread]
+        if covered:
+            # Read, not scored: the file's contents went through the same
+            # extractors as the article, so anything it states reaches the
+            # findings and the checklist on its own merits. Awarding points
+            # merely for the file having been opened would score the reader.
+            basis.append(
+                f"{len(covered)} supplementary item(s) the Methods defer to were supplied and "
+                f"read ({', '.join(r.label for r in covered[:4])})"
+            )
+        if unread:
             # No point change in either direction. A paper that put a step in a
             # supplementary table did say it, so it cannot be marked down for
             # that; and nothing here has read the table, so nothing can be
@@ -804,11 +815,11 @@ def _method_completeness(repo: RepoAnalysis, supplements: Supplements | None = N
             # being reported as a verdict on the whole method when part of the
             # method is in a file this audit never opened.
             undetermined.append(
-                f"the Methods section defers to {len(deferred)} supplementary item(s) "
-                f"({', '.join(r.label for r in deferred[:4])}) whose contents were not read, "
+                f"the Methods section defers to {len(unread)} supplementary item(s) "
+                f"({', '.join(r.label for r in unread[:4])}) whose contents were not read, "
                 f"so the score above covers the article body only"
             )
-        elif supplements.inventory != "declared":
+        elif not deferred and supplements.inventory != "declared":
             undetermined.append(
                 "the input carries no supplement manifest, so whether method detail was "
                 "published outside the article body could not be determined"
@@ -1270,7 +1281,7 @@ def link_mismatches(pages: list[PageText]) -> list[tuple[str, str, str]]:
     for page in pages:
         text = normalize(page.text)
         for group in _PARENTHETICAL.finditer(text):
-            if resolver.at(page.page, group.start()).label not in _AVAILABILITY:
+            if resolver.at(page.page, group.start(), page.document).label not in _AVAILABILITY:
                 continue
             body = group.group(1)
             in_link = {(p, d) for p, d in _URL_ACCESSION.findall(body)}

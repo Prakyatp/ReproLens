@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,11 +40,10 @@ from reprolens.documents import crosscheck as ocr_crosscheck
 from reprolens.documents import figures as figure_extract
 from reprolens.documents import supplements as supplement_scan
 from reprolens.documents import tables as table_scan
-from reprolens.documents.base import PageText, TextBackend, is_readable
+from reprolens.documents.base import PageText
 from reprolens.documents.figures import figure_numbers
-from reprolens.documents.jats_xml import JatsXmlBackend
 from reprolens.documents.ocr import OcrBackend
-from reprolens.documents.pdf_text import PdfTextBackend
+from reprolens.documents.reading import read_pages
 from reprolens.extraction import checklist as checklist_build
 from reprolens.extraction.checklist import Checklist
 from reprolens.extraction.merge import Merge
@@ -55,48 +55,29 @@ from reprolens.repository import fetch as repo_fetch
 from reprolens.scoring.rubric import assess
 
 
-def pick_backend(path: Path) -> TextBackend:
-    """Choose a reader from the file type. One line per supported input."""
-    if path.suffix.lower() in {".xml", ".nxml"}:
-        return JatsXmlBackend()
-    return PdfTextBackend()
-
-
 def read_text(path: Path, *, use_ocr: bool) -> tuple[list[PageText], list[str]]:
-    """The text channel: text layer first, OCR only for pages it cannot serve."""
-    pages = pick_backend(path).read(path)
+    """The article's text channel. See ``reprolens.documents.reading``."""
+    return read_pages(path, use_ocr=use_ocr)
 
-    if not is_readable(pages):
-        # Not "this paper says little" -- this reader failed. Everything below
-        # runs anyway, because a partial reading is still worth reporting, but
-        # the assessment refuses to score and this warning leads the report.
-        total = sum(page.char_count for page in pages)
-        return pages, [
-            f"THE DOCUMENT WAS NOT READ: {len(pages)} segment(s) and {total} characters "
-            f"came out of {path.name}. A real paper runs to tens of thousands. Nothing "
-            f"below is evidence about the paper, and every rubric criterion is reported "
-            f"as not assessed rather than scored."
-        ]
 
-    unreadable = [p.page for p in pages if p.needs_ocr]
-    if not unreadable:
-        return pages, []
+class Progress:
+    """What the audit is doing right now, as one JSON line per event on stderr.
 
-    listed = ", ".join(str(n) for n in unreadable)
-    if not use_ocr:
-        return pages, [
-            f"{len(unreadable)} of {len(pages)} pages have no usable text layer "
-            f"(pages {listed}) and OCR is disabled. Findings are INCOMPLETE: "
-            f"absence of a resource on these pages is not evidence of absence."
-        ]
+    Off by default; ``--progress`` turns it on. Exists because a cold run reads
+    figures through a local model at roughly 25 seconds each, and a page that
+    says "reading figures" and then nothing for three minutes is a page whose
+    reader assumes it has hung. Stderr rather than stdout so the report the
+    CLI prints stays parseable.
+    """
 
-    recovered = {p.page: p for p in OcrBackend().read(path, pages=unreadable)}
-    merged = [recovered.get(p.page, p) for p in pages]
-    low = [f"p{n}" for n, p in recovered.items() if (p.confidence or 0) < 0.80]
-    notes = [f"pages {listed} had no text layer and were read by OCR (approximate)."]
-    if low:
-        notes.append(f"low OCR confidence on {', '.join(low)} -- identifiers there may be wrong.")
-    return merged, notes
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    def __call__(self, stage: str, status: str = "start", **detail) -> None:
+        if not self.enabled:
+            return
+        event = {"event": "progress", "stage": stage, "status": status, **detail}
+        print(json.dumps(event), file=sys.stderr, flush=True)
 
 
 def vision_blocked(backend_name: str, model: str | None) -> str | None:
@@ -113,33 +94,47 @@ def vision_blocked(backend_name: str, model: str | None) -> str | None:
 
 
 def read_figures(
-    path: Path, out_dir: Path, *, use_vlm: bool, blocked: str | None = None
-) -> tuple[list[dict], list[str]]:
-    """The image channel. Figures are extracted regardless; the VLM is optional."""
-    if path.suffix.lower() not in {".pdf"}:
-        return [], ["figure extraction needs a PDF; skipped for this input."]
+    documents: list[tuple[Path, str]],
+    out_dir: Path,
+    *,
+    use_vlm: bool,
+    blocked: str | None = None,
+) -> tuple[list[dict], list, list[str]]:
+    """The image channel over every PDF supplied: the article, then its supplements.
 
-    found = figure_extract.extract(path, out_dir / "figures")
-    records = [
-        {
-            "figure_id": f.figure_id,
-            "label": f.label,
-            "page": f.page,
-            "bbox": [round(v, 1) for v in f.bbox],
-            "caption": f.caption,
-            "image": str(f.image_path),
-            "reading": None,
-        }
-        for f in found
-    ]
-    if not use_vlm or blocked:
+    Figures are extracted regardless; the VLM is optional. ``documents`` pairs
+    each file with the name provenance uses for it (empty for the article).
+    """
+    warnings: list[str] = []
+    found = []
+    records: list[dict] = []
+    for path, document in documents:
+        if path.suffix.lower() != ".pdf":
+            if not document:
+                warnings.append("figure extraction needs a PDF; skipped for this input.")
+            continue
+        for figure in figure_extract.extract(path, out_dir / "figures"):
+            found.append(figure)
+            records.append(
+                {
+                    "figure_id": figure.figure_id,
+                    "label": figure.label,
+                    "page": figure.page,
+                    "document": document,
+                    "bbox": [round(v, 1) for v in figure.bbox],
+                    "caption": figure.caption,
+                    "image": str(figure.image_path),
+                    "reading": None,
+                }
+            )
+    if records and (not use_vlm or blocked):
         why = (blocked or "figure reading was switched off with --no-vlm").rstrip(".")
-        return records, [
+        warnings.append(
             f"{len(records)} figure(s) were extracted but NOT read, because {why}. "
             f"Anything visible only in a figure is absent from the findings below -- "
             f"this is a gap in the audit, not a gap in the paper."
-        ]
-    return records, []
+        )
+    return records, found, warnings
 
 
 def run_vlm(
@@ -150,6 +145,7 @@ def run_vlm(
     backend_name: str,
     model: str | None,
     ocr_text: str = "",
+    progress: Progress | None = None,
 ) -> tuple[list[str], Merge]:
     """Read each figure, then reconcile what it claims against the text channel."""
     from reprolens.extraction import vlm
@@ -162,7 +158,9 @@ def run_vlm(
     malformed_total: list[str] = []
     readings: list[tuple[str, object]] = []
 
-    for record in records:
+    for index, record in enumerate(records, start=1):
+        if progress:
+            progress("figures", "figure", i=index, n=len(records), figure=record["figure_id"])
         contents = vlm.read_figure(by_id[record["figure_id"]], backend, cache)
         corroborated, unverified = vlm.corroborate(contents, document_text)
         malformed = vlm.shape_errors(contents)
@@ -333,14 +331,35 @@ def audit(
     repo_cache: Path = Path("data/repos"),
     vlm_backend: str = "ollama",
     vlm_model: str | None = None,
+    supplement_paths: list[Path] | None = None,
+    progress: Progress | None = None,
 ) -> dict:
+    progress = progress or Progress(False)
     paper_id = path.stem
     paper_out = out_dir / paper_id
     paper_out.mkdir(parents=True, exist_ok=True)
 
+    progress("text")
     pages, warnings = read_text(path, use_ocr=use_ocr)
-    findings = links.extract(pages)
-    checklist = checklist_build.build(pages)
+    progress("text", "done", pages=len(pages), backend=pages[0].backend if pages else "none")
+
+    # Supplements dropped beside the paper go through the same readers, and
+    # their pages carry their document's name so provenance can point into the
+    # right file. Everything that scans pages scans all of them; everything
+    # that is about the article's own structure -- readability, the section
+    # outline, which supplements its prose refers to -- sees only its pages.
+    progress("supplements")
+    supplement_pages, received = supplement_scan.read_files(
+        list(supplement_paths or []), use_ocr=use_ocr
+    )
+    all_pages = pages + supplement_pages
+    progress(
+        "supplements", "done", received=len(received), readable=sum(r.readable for r in received)
+    )
+
+    findings = links.extract(all_pages)
+    checklist = checklist_build.build(all_pages)
+    document_text = "\n".join(p.text for p in all_pages)
 
     # The cross-check runs ahead of the image channel, not after it, because its
     # OCR text is the second witness the figure merge consults. A figure's
@@ -356,23 +375,27 @@ def audit(
     # are evidence the rubric consults. It used to run after, which is why a
     # channel that worked contributed nothing to any score for weeks.
     blocked = vision_blocked(vlm_backend, vlm_model) if use_vlm else None
-    figure_records, figure_warnings = read_figures(
-        path, paper_out, use_vlm=use_vlm, blocked=blocked
+    progress("figures")
+    documents = [(path, "")] + [
+        (p, r.document) for p, r in zip(supplement_paths or [], received, strict=True) if r.readable
+    ]
+    figure_records, found, figure_warnings = read_figures(
+        documents, paper_out, use_vlm=use_vlm, blocked=blocked
     )
     warnings += figure_warnings
 
     merged: Merge | None = None
     if use_vlm and not blocked and figure_records:
-        found = figure_extract.extract(path, paper_out / "figures")
         try:
             vlm_warnings, merged = run_vlm(
                 figure_records,
                 found,
-                "\n".join(p.text for p in pages),
+                document_text,
                 checklist,
                 vlm_backend,
                 vlm_model,
                 ocr_text,
+                progress=progress,
             )
             warnings += vlm_warnings
         except Exception as error:  # model unavailable, credentials, network
@@ -382,20 +405,38 @@ def audit(
                 f"from the findings below. Detail: {error}"
             )
 
+    progress(
+        "figures",
+        "done",
+        extracted=len(figure_records),
+        read=sum(1 for r in figure_records if r["reading"]),
+    )
+
+    progress("repository")
     repo, repo_warnings = read_repositories(
         findings, pages, checklist, repo_cache, use_repo=use_repo
     )
     warnings += repo_warnings
+    progress("repository", "done", repositories=len(repo.checkouts) if repo.fetched else 0)
 
+    progress("archives")
     resolutions, resolve_warnings = read_datasets(findings, use_network=use_resolve)
     warnings += resolve_warnings
+    progress("archives", "done")
 
-    supplements = supplement_scan.collect(path, pages)
+    supplements = supplement_scan.collect(path, pages, received)
     warnings += supplements.notes
 
+    progress("tables")
     tables = table_scan.extract(path)
+    for supplement_path, item in zip(supplement_paths or [], received, strict=True):
+        if item.readable and supplement_path.suffix.lower() == ".pdf":
+            extra = table_scan.extract(supplement_path)
+            tables.found += extra.found
+            tables.captions_seen += extra.captions_seen
     warnings += tables.notes
-    table_agreement = table_scan.agreement(tables, "\n".join(p.text for p in pages))
+    table_agreement = table_scan.agreement(tables, document_text)
+    progress("tables", "done", tables=len(tables.found))
     if (share := table_agreement["share_echoed"]) is not None:
         warnings.append(
             f"{table_agreement['named_values_echoed_in_prose']} of "
@@ -409,6 +450,7 @@ def audit(
     dependency_graph = graph_build.build(repo.to_dict(), resolutions=resolutions.to_dict())
     warnings += dependency_graph.notes
 
+    progress("scoring")
     assessment = assess(
         pages,
         findings,
@@ -437,8 +479,9 @@ def audit(
                 "has_images": p.has_images,
                 "needs_ocr": p.needs_ocr,
                 "n_link_annotations": len(p.links),
+                "document": p.document,
             }
-            for p in pages
+            for p in all_pages
         ],
         "sections": _section_outline(pages),
         "findings": [f.to_dict() | roles.classify(f).as_dict() for f in findings],
@@ -463,6 +506,8 @@ def audit(
     # Rendered from the report dict above and nothing else, so report.md cannot
     # assert anything links.json does not already contain.
     (paper_out / "report.md").write_text(render(report))
+    progress("scoring", "done", score=assessment.score, coverage=assessment.coverage)
+    progress("done", "done", out=str(paper_out))
     return report | {"n_figures": len(figure_records)}
 
 
@@ -527,10 +572,27 @@ def main() -> int:
         "--vlm", default="ollama", choices=["ollama", "anthropic"], help="vision backend"
     )
     parser.add_argument("--vlm-model", help="override the backend's default model")
+    parser.add_argument(
+        "--supplement",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="FILE",
+        help="a supplementary file published with the paper, read alongside it "
+        "(repeatable; PDF, XLSX, CSV, TSV, TXT, MD, DOCX)",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="emit one JSON line per stage on stderr, for a front end to follow",
+    )
     args = parser.parse_args()
 
     if not args.paper.is_file():
         parser.error(f"no such file: {args.paper}")
+    for supplement in args.supplement:
+        if not supplement.is_file():
+            parser.error(f"no such supplement: {supplement}")
 
     report = audit(
         args.paper,
@@ -543,6 +605,8 @@ def main() -> int:
         repo_cache=args.repo_cache,
         vlm_backend=args.vlm,
         vlm_model=args.vlm_model,
+        supplement_paths=args.supplement,
+        progress=Progress(args.progress),
     )
 
     for warning in report["warnings"]:
