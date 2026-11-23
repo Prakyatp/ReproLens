@@ -232,6 +232,21 @@ class TestSeverityFollowsTheBlueprint:
         assert assess([page("")], [], checklist).issues == []
 
 
+class TestCountingProblemsNotItems:
+    # A reviewer writes "these tools have no versions" once. Counting each tool
+    # as its own major issue put the app at 17 where the annotators had 3.
+    def test_unversioned_tools_are_one_problem_with_many_items(self):
+        checklist = Checklist(
+            software=[software(n, "tool", "named_only") for n in ("STAR", "samtools", "bedtools")],
+            parameters=[Parameter(flag="--x", value=None, evidence="x")],
+            commands=[],
+        )
+        result = assess([page("")], [], checklist)
+        assert result.counts()["major"] == 2
+        assert result.item_counts()["major"] == 4
+        assert result.to_dict()["severity_items"]["major"] == 4
+
+
 class TestAValueThePaperStatesItself:
     def _with(self, *settings: Setting):
         checklist = Checklist(software=[], parameters=[], commands=[], settings=list(settings))

@@ -98,6 +98,10 @@ def headline(assessment: dict) -> dict:
         "assessed_points": assessment.get("assessed_points", 0),
         "determined_points": assessment.get("determined_points", 0),
         "severity": {key: assessment.get("severity", {}).get(key, 0) for key in SEVERITY_ORDER},
+        "severity_items": {
+            key: (assessment.get("severity_items") or assessment.get("severity", {})).get(key, 0)
+            for key in SEVERITY_ORDER
+        },
         "rubric_version": assessment.get("rubric_version", "?"),
     }
 
@@ -318,13 +322,16 @@ def missing(assessment: dict, links: dict) -> dict:
     issues = assessment.get("issues", [])
     groups = []
     for key in SEVERITY_ORDER:
-        of_kind = [i for i in issues if i["severity"] == key]
+        of_kind = sorted(
+            (i for i in issues if i["severity"] == key), key=lambda i: i.get("kind", "")
+        )
         if not of_kind:
             continue
         groups.append(
             {
                 "severity": key,
                 "label": SEVERITY_LABEL[key],
+                "problems": len({i.get("kind", "") for i in of_kind}),
                 "items": [
                     item(
                         str(i.get("resource", "")),

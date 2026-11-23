@@ -170,6 +170,21 @@ class Assessment:
         return self.floor / self.determined
 
     def counts(self) -> dict[str, int]:
+        """Distinct problems per severity: one per kind, however many items it covers.
+
+        A reviewer writes "twelve tools are named without a version" as one
+        issue, not twelve, and that is the unit the counts are compared in.
+        Counting items instead made a paper that never versions anything look
+        twelve times worse than one that forgot a single tool, when the fix --
+        state the versions -- is the same one sentence. The items are all
+        still listed, and ``item_counts`` keeps their number.
+        """
+        return {
+            severity: len({i.kind for i in self.issues if i.severity == severity})
+            for severity in ("hard_blocker", "major", "minor")
+        }
+
+    def item_counts(self) -> dict[str, int]:
         return {
             severity: len([i for i in self.issues if i.severity == severity])
             for severity in ("hard_blocker", "major", "minor")
@@ -186,6 +201,7 @@ class Assessment:
             "score": round(self.score, 4) if self.score is not None else None,
             "min_coverage": MIN_COVERAGE,
             "severity": self.counts(),
+            "severity_items": self.item_counts(),
             "criteria": [asdict(c) for c in self.criteria],
             "issues": [asdict(i) for i in self.issues],
         }
