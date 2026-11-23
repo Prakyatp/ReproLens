@@ -45,6 +45,13 @@ _STATUS_WORDS = {
 }
 
 
+_READERS = {"pdf_text": "PDF text layer", "jats_xml": "JATS XML", "ocr": "page images by OCR"}
+
+
+def _plural(n: int, word: str, many: str | None = None) -> str:
+    return f"{n} {word if n == 1 else (many or word + 's')}"
+
+
 def build(result_dir: Path) -> dict:
     """Everything a results page shows, from one audit's output directory."""
     links = _load(result_dir / "links.json")
@@ -102,7 +109,11 @@ def headline(assessment: dict) -> dict:
 def channels(links: dict, figures: list) -> list[dict]:
     """The condition of every channel, stated whether it ran or not."""
     rows: list[dict] = [
-        {"name": "text", "ran": True, "text": f"Text read by {links.get('backend', 'unknown')}"}
+        {
+            "name": "text",
+            "ran": True,
+            "text": f"Text read from the {_READERS.get(links.get('backend', ''), 'document')}",
+        }
     ]
 
     pages = links.get("pages") or []
@@ -112,7 +123,7 @@ def channels(links: dict, figures: list) -> list[dict]:
             {
                 "name": "ocr",
                 "ran": True,
-                "text": f"{len(ocr_pages)} page(s) had no text layer and were read by OCR",
+                "text": f"{_plural(len(ocr_pages), 'page')} without a text layer, read by OCR",
             }
         )
 
@@ -146,7 +157,7 @@ def channels(links: dict, figures: list) -> list[dict]:
             {
                 "name": "supplements",
                 "ran": read_count > 0,
-                "text": f"{read_count} of {received} supplied supplement(s) read",
+                "text": f"{read_count} of {_plural(received, 'supplied supplement')} read",
             }
         )
 
@@ -154,7 +165,11 @@ def channels(links: dict, figures: list) -> list[dict]:
     fetched = repo.get("repositories") or []
     if repo.get("fetched") and fetched:
         rows.append(
-            {"name": "repository", "ran": True, "text": f"{len(fetched)} repository/ies read"}
+            {
+                "name": "repository",
+                "ran": True,
+                "text": f"{_plural(len(fetched), 'repository', 'repositories')} read",
+            }
         )
     elif repo.get("fetched"):
         rows.append({"name": "repository", "ran": False, "text": "No repository was reachable"})

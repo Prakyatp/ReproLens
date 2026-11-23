@@ -63,9 +63,10 @@ def test_the_viewer_never_references_benchmark():
     # The UI shows a person the audit, so it is on the app's side of the line:
     # ground truth reaching it would put the answers next to the findings on
     # one screen, which is the most persuasive possible way to be wrong.
-    assert not _references_benchmark((ROOT / "ui.py").read_text())
     assert not _references_benchmark((ROOT / "app" / "server.py").read_text())
     assert not _references_benchmark((ROOT / "reprolens" / "reporting" / "view.py").read_text())
+    # The page is HTML, not Python, so it gets a plain text check.
+    assert "benchmark" not in (ROOT / "app" / "static" / "index.html").read_text().lower()
 
 
 def test_grader_is_the_one_place_that_does():

@@ -92,7 +92,7 @@ class TestTheChannels:
 
     def test_ocr_pages_are_reported(self):
         rows = view.channels({"pages": [{"backend": "ocr"}, {"backend": "pdf_text"}]}, [])
-        assert any(r["name"] == "ocr" and "1 page(s)" in r["text"] for r in rows)
+        assert any(r["name"] == "ocr" and "1 page without a text layer" in r["text"] for r in rows)
 
     def test_supplied_supplements_are_a_channel(self):
         rows = view.channels({"supplements": {"summary": {"received": 3, "contents_read": 2}}}, [])

@@ -45,6 +45,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 
+from reprolens.discovery.links import excerpt
 from reprolens.discovery.patterns import normalize_with_offsets
 from reprolens.documents.base import PageText
 from reprolens.documents.sections import SectionLabel, resolve
@@ -586,7 +587,7 @@ def _value_after(text: str, position: int) -> str | None:
 
 
 def _span(text: str, start: int, end: int) -> str:
-    return " ".join(text[max(0, start - 40) : min(len(text), end)].split())
+    return excerpt(text, start - 40, end)
 
 
 def _quote(text: str, match: re.Match) -> str:
