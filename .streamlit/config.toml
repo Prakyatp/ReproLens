@@ -1,0 +1,10 @@
+# The viewer is a local tool over local audit output, so it listens locally.
+# Streamlit's default binds every interface and prints an "External URL" on the
+# machine's public address -- which would put a paper's audit, and any
+# unpublished data named in it, on whatever network the laptop is attached to.
+[server]
+address = "localhost"
+headless = true
+
+[browser]
+gatherUsageStats = false
