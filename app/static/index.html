@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ReproLens</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='13' cy='13' r='9' fill='none' stroke='%23136f63' stroke-width='3.5'/%3E%3Cpath d='M20 20l8 8' stroke='%23136f63' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -166,7 +167,7 @@
   .stage.skipped .dot { background: var(--line); }
   .stage .name { font-weight: 500; }
   .stage .detail { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .stage .sub { grid-column: 2 / -1; color: var(--ink-3); font-size: 13px; }
+  .stage .sub { grid-column: 2 / -1; color: var(--ink-3); font-size: 13px; margin: -6px 0 0; }
   .progress { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; grid-column: 2 / -1; }
   .progress > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -197,7 +198,7 @@
   .band { position: relative; height: 26px; border-radius: 6px; background: var(--line-2); overflow: hidden; margin-top: 16px; }
   .band .floor { position: absolute; inset: 0 auto 0 0; background: var(--ok); }
   .band .gap { position: absolute; inset: 0 auto 0 0; background: var(--hatch); }
-  .band .lbl { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px; font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; mix-blend-mode: difference; filter: invert(1) grayscale(1) contrast(9); }
+  .band .lbl { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px; font-size: 12.5px; font-weight: 500; color: #fff; font-variant-numeric: tabular-nums; text-shadow: 0 0 3px rgba(0,0,0,.35); }
   .band-note { color: var(--ink-3); font-size: 12.5px; margin-top: 8px; line-height: 1.5; }
   .nothing-run { color: var(--ink-3); font-size: 12.5px; margin-top: 10px; }
   .sev { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -474,6 +475,7 @@
     ['tables', 'Reading the tables', ''],
     ['scoring', 'Scoring', 'floor and ceiling per criterion'],
   ];
+  const READERS = { pdf_text: 'text layer', jats_xml: 'JATS XML', ocr: 'OCR', none: 'nothing read' };
   const stageEls = {};
   function buildStages(withSupplements) {
     const ul = $('stages'); ul.replaceChildren();
@@ -500,7 +502,7 @@
       li.classList.remove('active'); li.classList.add('done');
       bar.hidden = true;
       const d = [];
-      if (e.pages !== undefined) d.push(`${plural(e.pages, 'page')} · ${e.backend}`);
+      if (e.pages !== undefined) d.push(`${plural(e.pages, 'page')} · ${READERS[e.backend] || e.backend}`);
       if (e.received !== undefined) d.push(`${e.readable} of ${e.received} read`);
       if (e.extracted !== undefined) d.push(`${e.read} of ${e.extracted} read`);
       if (e.repositories !== undefined) d.push(plural(e.repositories, 'repository'));
@@ -650,11 +652,11 @@
       const l = el('div', 'link-line'); const a = el('a', '', it.paper_link); a.href = it.paper_link; a.target = '_blank'; a.rel = 'noopener';
       l.append('🔗', a, el('span', 'how', '— ' + it.paper_link_how)); card.append(l);
     } else if (it.mentions && it.mentions.length) {
-      const l = el('div', 'link-line none'); l.append('🔗 ', el('b', '', 'the paper gives no link for this'), ', only the identifier.'); card.append(l);
+      const l = el('div', 'link-line none'); const s = el('span'); s.append(el('b', '', 'The paper gives no link for this'), ', only the identifier.'); l.append('🔗', s); card.append(l);
     }
     if (it.lookup) {
       const l = el('div', 'link-line lookup'); const a = el('a', '', 'look it up'); a.href = it.lookup; a.target = '_blank'; a.rel = 'noopener';
-      l.append('🔎 ', a, ' — built from the identifier, not a link the paper gave'); card.append(l);
+      l.append('🔎', a, el('span', '', '— built from the identifier, not a link the paper gave')); card.append(l);
     }
     if (it.mentions && it.mentions.length) {
       const m = el('div', 'mentions');
@@ -725,7 +727,7 @@
       const grid = el('div', 'figs');
       for (const f of figs) {
         const card = el('div', 'fig');
-        if (f.image) { const img = el('img'); img.src = `/api/audits/${jobId}/figures/${encodeURIComponent(f.image)}`; img.alt = f.label || f.figure_id; img.loading = 'lazy'; card.append(img); }
+        if (f.image) { const src = `/api/audits/${jobId}/figures/${encodeURIComponent(f.image)}`; const a = el('a'); a.href = src; a.target = '_blank'; a.rel = 'noopener'; a.title = 'Open the full figure'; const img = el('img'); img.src = src; img.alt = f.label || f.figure_id; img.loading = 'lazy'; a.append(img); card.append(a); }
         const body = el('div', 'body');
         const lab = el('div', 'lab'); lab.append(el('b', '', f.label || f.figure_id), el('span', 'meta', (f.document ? f.document + ', ' : '') + 'page ' + f.page)); body.append(lab);
         if (f.caption) body.append(el('div', 'cap', f.caption));

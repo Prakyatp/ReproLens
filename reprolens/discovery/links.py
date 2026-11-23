@@ -255,7 +255,20 @@ def _matches(text: str) -> list[tuple[str, str, int, int]]:
 
 def _context(text: str, start: int, end: int) -> str:
     """The surrounding sentence fragment, as the evidence quote for this hit."""
-    left = max(0, start - CONTEXT_CHARS)
-    right = min(len(text), end + CONTEXT_CHARS)
-    snippet = text[left:right].replace("\n", " ")
-    return " ".join(snippet.split())
+    return excerpt(text, start - CONTEXT_CHARS, end + CONTEXT_CHARS)
+
+
+def excerpt(text: str, left: int, right: int) -> str:
+    """``text[left:right]`` on whole words, with an ellipsis where it was cut.
+
+    A window cut mid-word reads as a misquote ("ealigning them using"), so a
+    partial word at either edge is dropped rather than shown.
+    """
+    left, right = max(0, left), min(len(text), right)
+    snippet = text[left:right]
+    if left > 0 and text[left - 1].isalnum() and snippet[:1].isalnum():
+        snippet = snippet.split(None, 1)[1] if len(snippet.split(None, 1)) > 1 else snippet
+    if right < len(text) and text[right].isalnum() and snippet[-1:].isalnum():
+        snippet = snippet.rsplit(None, 1)[0] if len(snippet.rsplit(None, 1)) > 1 else snippet
+    snippet = " ".join(snippet.split())
+    return ("…" if left > 0 else "") + snippet + ("…" if right < len(text) else "")
