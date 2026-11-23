@@ -1,0 +1,51 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # OCR tests rasterise a PDF and read it back, so they need the real
+      # engine; without it they skip, and the fallback would go untested.
+      - name: Install tesseract
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --extra dev --locked
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      # The journal PDFs are not redistributable and are not in the repository,
+      # so the tests that need them skip here. Everything else runs.
+      - name: Test
+        run: uv run pytest -q
+
+  # The image once shipped without prompts/, and every figure came back unread.
+  # Build it, then ask the audit inside it to load the prompt it needs.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t reprolens .
+      - name: Smoke test
+        run: |
+          docker run --rm reprolens python -c "
+          from pathlib import Path
+          from reprolens.extraction import vlm
+          assert Path(vlm.PROMPT_PATH).is_file(), 'prompt missing from the image'
+          import app.server
+          print('ok')"
