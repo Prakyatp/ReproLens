@@ -12,10 +12,12 @@ from reprolens.discovery.patterns import normalize, normalize_with_offsets
 from reprolens.documents.base import PageText
 from reprolens.documents.pdf_text import (
     Line,
+    _assemble,
     _drop_front_matter_headings,
     _furniture_blocks,
     _inherit_labels,
     _is_heading,
+    _is_table_row,
     _split_run_in,
 )
 from reprolens.documents.sections import SectionMark, classify_heading, resolve
@@ -551,3 +553,53 @@ class TestRunInHeadings:
         tail = Line("is on Figshare.", self.BODY, False)
         out = _split_run_in([run_in, tail], self.BODY)
         assert out[-1] == tail
+
+
+class TestTablesAndLetteredSubsections:
+    """ALIGNN, an accepted manuscript set in one size and weight throughout.
+
+    Its table header rows read as headings ("Property Units MAD CFID CGCNN
+    ALIGNN MAD:"), and its lettered subsections ("A. Atomistic graph
+    representation") read as siblings of Results, so everything under them
+    was labelled ``other``.
+    """
+
+    SIZE = 12.0
+
+    def cells(self, *texts: str, weight: bool = True) -> list[Line]:
+        return [Line(text=t, size=self.SIZE, bold=weight, y=124.0) for t in texts]
+
+    def test_a_bold_row_of_cells_is_a_table_not_a_heading(self):
+        assert _is_table_row(self.cells("Property ", "Units ", "MAD ", "CFID "))
+
+    def test_a_justified_sentence_after_a_run_in_heading_is_not_a_table(self):
+        row = self.cells("Data ", "availability: ") + self.cells("All ", "data ", weight=False)
+        assert not _is_table_row(row)
+
+    def test_a_row_that_names_a_section_is_kept(self):
+        assert not _is_table_row(self.cells("Data ", "availability"))
+
+    def test_lines_without_geometry_are_never_a_table(self):
+        assert not _is_table_row([bold("Methods", 12), bold("overview", 12)])
+
+    def test_table_cells_leave_no_mark(self):
+        block = {"lines": self.cells("Target ", "Units ", "SchNet "), "y0": 0}
+        _, marks, _ = _assemble([block], body_size=10.0, furniture=set(), levels={12.0: 1})
+        assert marks == []
+
+    def test_a_lone_acronym_cell_leaves_no_mark(self):
+        block = {"lines": [bold("MAE", 12)], "y0": 0}
+        _, marks, _ = _assemble([block], body_size=10.0, furniture=set(), levels={12.0: 1})
+        assert marks == []
+
+    def test_a_lettered_subsection_inherits_its_section(self):
+        blocks = [
+            {"lines": [bold("Results and discussion", 12)], "y0": 0},
+            {"lines": [bold("A. Atomistic graph representation", 12)], "y0": 0},
+            {"lines": [bold("Methods", 12)], "y0": 0},
+            {"lines": [bold("A: JARVIS-DFT dataset", 12)], "y0": 0},
+        ]
+        _, marks, _ = _assemble(blocks, body_size=10.0, furniture=set(), levels={12.0: 1})
+        page = PageText(page=1, text="", sections=marks)
+        _inherit_labels([page])
+        assert [m.label for m in marks] == ["results", "results", "methods", "methods"]

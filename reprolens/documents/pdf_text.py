@@ -133,6 +133,10 @@ class Line(NamedTuple):
     #: whole the line is 80 characters and not bold end to end, so it is not a
     #: heading by either signal, and the section vanishes.
     prefix: str = ""
+    #: Top of the line on the page. Two lines of one block on one baseline are
+    #: either cells of a table row or words of a justified sentence; never a
+    #: heading wrapped onto a second line.
+    y: float | None = None
 
 
 class PdfTextBackend:
@@ -191,6 +195,7 @@ def _blocks(page: pymupdf.Page) -> list[dict]:
                         size=max(span["size"] for span in body),
                         bold=_all_bold(body),
                         prefix=_bold_prefix(body),
+                        y=line["bbox"][1],
                     )
                 )
         if lines:
@@ -339,7 +344,7 @@ def _assemble(
             continue
 
         lines = _split_run_in(block["lines"], body_size)
-        index = 0
+        index = len(lines) if _is_table_row(lines) else 0
         while index < len(lines) and _is_heading(lines[index], body_size):
             size = lines[index].size
             bold = lines[index].bold
@@ -354,14 +359,21 @@ def _assemble(
                 parts.append(lines[index].text.strip())
                 index += 1
             heading = " ".join(parts)
-            marks.append(
-                SectionMark(
-                    offset=offset,
-                    heading=heading,
-                    label=classify_heading(heading),
-                    level=levels.get(round(size, 1), 1),
-                )
-            )
+            label = classify_heading(heading)
+            level = levels.get(round(size, 1), 1)
+            if label == "other" and _ACRONYM_CELL.match(heading):
+                # A lone bold column header ("MAE") that the layout gave a
+                # block of its own. Real section names in capitals classify.
+                pieces.append(heading)
+                offset += len(heading) + 1
+                continue
+            if label == "other" and _ENUMERATED.match(heading):
+                # "A. Atomistic graph representation": a lettered subsection.
+                # An accepted manuscript sets it at the same size and weight
+                # as "Results and discussion" above it, so size alone makes it
+                # a sibling and every finding under it loses its section.
+                level += 1
+            marks.append(SectionMark(offset=offset, heading=heading, label=label, level=level))
             pieces.append(heading)
             offset += len(heading) + 1  # +1 for the joining newline
 
@@ -372,6 +384,31 @@ def _assemble(
             offset += len(joined) + 1
 
     return "\n".join(pieces), marks, strays
+
+
+_ENUMERATED = re.compile(r"^(?:[A-H]|[IVX]{1,4})[.:)]\s+\S")
+_ACRONYM_CELL = re.compile(r"^[A-Z][A-Z0-9]{1,5}:?$")
+
+
+def _is_table_row(lines: list[Line]) -> bool:
+    """Whether a block opens with cells side by side rather than one line.
+
+    ALIGNN's table headers ("Property Units MAD CFID CGCNN ALIGNN") are bold
+    and short, so each cell passes as a heading and the cells merge into one.
+    What gives them away is the geometry: a wrapped heading moves down the
+    page, cells of a row share its baseline. Spacing does not separate them
+    from prose -- ALIGNN's justified "Data availability: All data used..." is
+    split into same-baseline pieces about as far apart as "Target Units
+    SchNet" -- but weight does: the sentence turns regular after its run-in
+    heading, a header row is bold all the way across. A row that reads as a
+    known section name is kept whatever its shape.
+    """
+    if len(lines) < 2 or lines[0].y is None:
+        return False
+    row = [line for line in lines if line.y is not None and abs(line.y - lines[0].y) < 2.0]
+    if len(row) < 2 or not all(line.bold for line in row):
+        return False
+    return classify_heading(" ".join(line.text.strip() for line in row)) == "other"
 
 
 def _split_run_in(lines: list[Line], body_size: float) -> list[Line]:

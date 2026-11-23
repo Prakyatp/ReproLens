@@ -170,8 +170,11 @@ def _heading(report: dict) -> list[str]:
     issues = (
         f"{_plural(counts.get('hard_blocker', 0), 'hard blocker')}, "
         f"{counts.get('major', 0)} major and "
-        f"{_plural(counts.get('minor', 0), 'minor issue')}"
+        f"{_plural(counts.get('minor', 0), 'minor problem')}"
     )
+    items = assessment.get("severity_items")
+    if items and sum(items.values()) != sum(counts.values()):
+        issues += f" across {_plural(sum(items.values()), 'flagged item')}"
     if score is None:
         # The issue counts survive a withheld percentage. They are findings in
         # their own right, established by evidence, and suppressing them would
