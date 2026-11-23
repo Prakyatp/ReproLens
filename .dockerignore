@@ -1,0 +1,14 @@
+.git
+.venv
+.cache
+.idea
+.vscode
+**/__pycache__
+output
+data
+benchmark
+tests
+docs
+check.py
+README.md
+ReproLens_Project_Blueprint.md
